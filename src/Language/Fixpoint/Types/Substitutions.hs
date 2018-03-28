@@ -1,3 +1,6 @@
+{-# LANGUAGE BangPatterns              #-}
+{-# LANGUAGE Strict                    #-}
+
 -- | This module contains the various instances for Subable,
 --   which (should) depend on the visitors, and hence cannot
 --   be in the same place as the @Term@ definitions.
@@ -57,10 +60,10 @@ instance Subable () where
   substa _ () = ()
 
 instance (Subable a, Subable b) => Subable (a,b) where
-  syms  (x, y)   = syms x ++ syms y
-  subst su (x,y) = (subst su x, subst su y)
-  substf f (x,y) = (substf f x, substf f y)
-  substa f (x,y) = (substa f x, substa f y)
+  syms  (!x, !y)   = syms x ++ syms y
+  subst su (!x,!y) = (subst su x, subst su y)
+  substf f (!x,!y) = (substf f x, substf f y)
+  substa f (!x,!y) = (substa f x, substa f y)
 
 instance Subable a => Subable [a] where
   syms   = concatMap syms
@@ -88,9 +91,9 @@ substExcept (Su xes) xs = Su $ M.filterWithKey (const . not . (`elem` xs)) xes
 
 instance Subable Symbol where
   substa f                 = f
-  substf f x               = subSymbol (Just (f x)) x
-  subst su x               = subSymbol (Just $ appSubst su x) x -- subSymbol (M.lookup x s) x
-  syms x                   = [x]
+  substf f !x               = subSymbol (Just $! f x) x
+  subst su !x               = subSymbol (Just $! appSubst su x) x -- subSymbol (M.lookup x s) x
+  syms !x                   = [x]
 
 appSubst :: Subst -> Symbol -> Expr
 appSubst (Su s) x = fromMaybe (EVar x) (M.lookup x s)

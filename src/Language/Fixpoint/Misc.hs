@@ -7,6 +7,7 @@
 {-# LANGUAGE TypeOperators             #-}
 {-# LANGUAGE BangPatterns              #-}
 {-# LANGUAGE ImplicitParams            #-} -- ignore hlint
+-- {-# LANGUAGE Strict #-}
 
 module Language.Fixpoint.Misc where
 
@@ -418,4 +419,4 @@ revMapM  :: (Monad m) => (a -> m b) -> [a] -> m [b]
 revMapM f          = go []
   where
     go !acc []     = return (reverse acc)
-    go !acc (x:xs) = do {!y <- f x; go (y:acc) xs}
+    go !acc (!x:(!xs)) = do {!y <- f x; go (y:acc) xs}

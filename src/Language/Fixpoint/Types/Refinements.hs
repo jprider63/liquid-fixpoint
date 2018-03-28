@@ -13,6 +13,7 @@
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE PatternGuards              #-}
 {-# LANGUAGE PatternSynonyms            #-}
+{-# LANGUAGE StrictData                 #-}
 
 -- | This module has the types for representing terms in the refinement logic.
 
