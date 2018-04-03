@@ -1,3 +1,5 @@
+{-# LANGUAGE BangPatterns #-}
+
 -- | This module contains the various instances for Subable,
 --   which (should) depend on the visitors, and hence cannot
 --   be in the same place as the @Term@ definitions.
@@ -267,23 +269,36 @@ ppRas = cat . punctuate comma . map toFix . flattenRefas
 exprSymbols :: Expr -> [Symbol]
 exprSymbols = go [] []
   where
-    go acc banned (EVar x) | x `elem` banned = acc
-    go acc _      (EVar x)                   = x:acc
-    go acc banned (EApp f e)         = go (go acc banned e) banned f
-    go acc banned (ELam (x,_) e)     = go acc (x:banned) e
+    go !acc banned (EVar x) | x `elem` banned = acc
+    go !acc _      (EVar x)                   = x:acc
+    go !acc banned (EApp f e)         = 
+        let !ss = go acc banned e in
+        go ss banned f
+    go !acc banned (ELam (x,_) e)     = go acc (x:banned) e
         -- (filter (/= x) (go [] e)) ++ acc
         -- filter (/= x) (go acc e) -- JP: Use banned? This is wrong. We shouldn't filter from acc.
-    go acc banned (ECoerc _ _ e)     = go acc banned e
-    go acc banned (ENeg e)           = go acc banned e
-    go acc banned (EBin _ e1 e2)     = go (go acc banned e2) banned e1
-    go acc banned (EIte p e1 e2)     = go (go (go acc banned e2) banned e1) banned p
-    go acc banned (ECst e _)         = go acc banned e
-    go acc banned (PAnd ps)          = foldr (\p a -> go a banned p) acc ps
-    go acc banned (POr ps)           = foldr (\p a -> go a banned p) acc ps
-    go acc banned (PNot p)           = go acc banned p
-    go acc banned (PIff p1 p2)       = go (go acc banned p2) banned p1
-    go acc banned (PImp p1 p2)       = go (go acc banned p2) banned p1
-    go acc banned (PAtom _ e1 e2)    = go (go acc banned e2) banned e1
-    go acc banned (PKVar _ (Su su)) = foldr (\p a -> go a banned p) acc $ M.elems su -- {- CUTSOLVER k : -} syms (M.elems su) -- JP: Not sure about this one...
-    go acc banned (PAll xts p)       = foldr (\xt a -> (fst xt):a) (go acc banned p) xts -- (fst <$> xts) ++ go acc p
-    go acc _      _                  = acc
+    go !acc banned (ECoerc _ _ e)     = go acc banned e
+    go !acc banned (ENeg e)           = go acc banned e
+    go !acc banned (EBin _ e1 e2)     = 
+        let !ss = go acc banned e2 in
+        go ss banned e1
+    go !acc banned (EIte p e1 e2)     =
+        let !ss1 = go acc banned e2 in
+        let !ss2 = go ss1 banned e1 in
+        go ss2 banned p
+    go !acc banned (ECst e _)         = go acc banned e
+    go !acc banned (PAnd ps)          = foldr (\p !a -> go a banned p) acc ps
+    go !acc banned (POr ps)           = foldr (\p !a -> go a banned p) acc ps
+    go !acc banned (PNot p)           = go acc banned p
+    go !acc banned (PIff p1 p2)       = 
+        let !ss = go acc banned p2 in
+        go ss banned p1
+    go !acc banned (PImp p1 p2)       =
+        let !ss = go acc banned p2 in
+        go ss banned p1
+    go !acc banned (PAtom _ e1 e2)    =
+        let !ss = go acc banned e2 in
+        go ss banned e1
+    go !acc banned (PKVar _ (Su su)) = foldr (\p !a -> go a banned p) acc $ M.elems su -- {- CUTSOLVER k : -} syms (M.elems su) -- JP: Not sure about this one...
+    go !acc banned (PAll xts p)       = foldr (\xt !a -> (fst xt):a) (go acc banned p) xts -- (fst <$> xts) ++ go acc p
+    go !acc _      _                  = acc
