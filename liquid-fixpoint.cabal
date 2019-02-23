@@ -63,6 +63,7 @@ Library
     ghc-options:   -Werror
   hs-source-dirs:  src
   Exposed-Modules: Language.Fixpoint.Types.Names,
+                   Language.Fixpoint.Types.Symbol,
                    Language.Fixpoint.Types.Errors,
                    Language.Fixpoint.Types.Config,
                    Language.Fixpoint.Types.Visitor,
@@ -157,6 +158,8 @@ Library
 
   -- unconditionally depend on located-base
   Build-Depends: located-base
+
+  extensions:    FunctionalDependencies
 
   if !os(windows)
     Build-Depends: ascii-progress >= 0.3

@@ -160,6 +160,7 @@ type SafeText = T.Text
 --
 --   where i is a unique integer (for each text)
 
+-- JP: Remove this eventually? Could be used for other languages
 data Symbol
   = S { _symbolId      :: !Id
       , symbolRaw     :: !T.Text
