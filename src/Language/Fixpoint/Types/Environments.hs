@@ -85,7 +85,7 @@ newtype IBindEnv   = FB (S.HashSet BindId) deriving (Eq, Data, Typeable, Generic
 instance PPrint IBindEnv where
   pprintTidy _ = pprint . L.sort . elemsIBindEnv
 
-newtype SEnv a     = SE { seBinds :: M.HashMap Symbol a }
+newtype SEnv s a   = SE { seBinds :: M.HashMap s a }
                      deriving (Eq, Data, Typeable, Generic, Foldable, Traversable)
 
 data SizedEnv a    = BE { _beSize  :: !Int
@@ -107,58 +107,58 @@ splitByQuantifiers (BE i bs) ebs = ( BE i $ M.filterWithKey (\k _ -> not (elem k
 -- data SolEnv        = SolEnv { soeBinds :: !BindEnv } 
 --                     deriving (Eq, Show, Generic)
 
-instance PPrint a => PPrint (SEnv a) where
+instance PPrint a => PPrint (SEnv s a) where
   pprintTidy k = pprintKVs k . L.sortBy (compare `on` fst) . toListSEnv
 
-toListSEnv              ::  SEnv a -> [(Symbol, a)]
+toListSEnv              ::  SEnv s a -> [(s, a)]
 toListSEnv (SE env)     = M.toList env
 
-fromListSEnv            ::  [(Symbol, a)] -> SEnv a
+fromListSEnv            ::  [(s, a)] -> SEnv s a
 fromListSEnv            = SE . M.fromList
 
-fromMapSEnv             ::  M.HashMap Symbol a -> SEnv a
+fromMapSEnv             ::  M.HashMap s a -> SEnv s a
 fromMapSEnv             = SE
 
-mapSEnv                 :: (a -> b) -> SEnv a -> SEnv b
+mapSEnv                 :: (a -> b) -> SEnv s a -> SEnv s b
 mapSEnv f (SE env)      = SE (fmap f env)
 
-mapMSEnv                :: (Monad m) => (a -> m b) -> SEnv a -> m (SEnv b)
+mapMSEnv                :: (Monad m) => (a -> m b) -> SEnv s a -> m (SEnv s b)
 mapMSEnv f env          = fromListSEnv <$> mapM (secondM f) (toListSEnv env)
 
-mapSEnvWithKey          :: ((Symbol, a) -> (Symbol, b)) -> SEnv a -> SEnv b
+mapSEnvWithKey          :: ((s, a) -> (s, b)) -> SEnv s a -> SEnv s b
 mapSEnvWithKey f        = fromListSEnv . fmap f . toListSEnv
 
-deleteSEnv :: Symbol -> SEnv a -> SEnv a
+deleteSEnv :: Symbol -> SEnv s a -> SEnv s a
 deleteSEnv x (SE env)   = SE (M.delete x env)
 
-insertSEnv :: Symbol -> a -> SEnv a -> SEnv a
+insertSEnv :: Symbol -> a -> SEnv s a -> SEnv s a
 insertSEnv x v (SE env) = SE (M.insert x v env)
 
-lookupSEnv :: Symbol -> SEnv a -> Maybe a
+lookupSEnv :: Symbol -> SEnv s a -> Maybe a
 lookupSEnv x (SE env)   = M.lookup x env
 
-emptySEnv :: SEnv a
+emptySEnv :: SEnv s a
 emptySEnv               = SE M.empty
 
-memberSEnv :: Symbol -> SEnv a -> Bool
+memberSEnv :: Symbol -> SEnv s a -> Bool
 memberSEnv x (SE env)   = M.member x env
 
-intersectWithSEnv :: (v1 -> v2 -> a) -> SEnv v1 -> SEnv v2 -> SEnv a
+intersectWithSEnv :: (v1 -> v2 -> a) -> SEnv s v1 -> SEnv s v2 -> SEnv s a
 intersectWithSEnv f (SE m1) (SE m2) = SE (M.intersectionWith f m1 m2)
 
-differenceSEnv :: SEnv a -> SEnv w -> SEnv a
+differenceSEnv :: SEnv s a -> SEnv s w -> SEnv s a
 differenceSEnv (SE m1) (SE m2) = SE (M.difference m1 m2)
 
-filterSEnv :: (a -> Bool) -> SEnv a -> SEnv a
+filterSEnv :: (a -> Bool) -> SEnv s a -> SEnv s a
 filterSEnv f (SE m)     = SE (M.filter f m)
 
-unionSEnv :: SEnv a -> M.HashMap Symbol a -> SEnv a
+unionSEnv :: SEnv s a -> M.HashMap s a -> SEnv s a
 unionSEnv (SE m1) m2    = SE (M.union m1 m2)
 
-unionSEnv' :: SEnv a -> SEnv a -> SEnv a
+unionSEnv' :: SEnv s a -> SEnv s a -> SEnv s a
 unionSEnv' (SE m1) (SE m2)    = SE (M.union m1 m2)
 
-lookupSEnvWithDistance :: Symbol -> SEnv a -> SESearch a
+lookupSEnvWithDistance :: s -> SEnv s a -> SESearch a
 lookupSEnvWithDistance x (SE env)
   = case M.lookup x env of
      Just z  -> Found z
@@ -255,7 +255,7 @@ diffIBindEnv (FB m1) (FB m2) = FB $ m1 `S.difference` m2
 adjustBindEnv :: ((Symbol, SortedReft) -> (Symbol, SortedReft)) -> BindId -> BindEnv -> BindEnv
 adjustBindEnv f i (BE n m) = BE n $ M.adjust f i m
 
-instance Functor SEnv where
+instance Functor (SEnv s) where
   fmap = mapSEnv
 
 instance Fixpoint EBindEnv where
@@ -268,16 +268,16 @@ instance Fixpoint BindEnv where
     where
       toFixBind (i, (x, r)) = "bind" <+> toFix i <+> toFix x <+> ":" <+> toFix r
 
-instance (Fixpoint a) => Fixpoint (SEnv a) where
+instance (Ord s, Fixpoint s, Fixpoint a) => Fixpoint (SEnv s a) where
    toFix (SE m)   = toFix (hashMapToAscList m)
 
-instance Fixpoint (SEnv a) => Show (SEnv a) where
+instance Fixpoint (SEnv s a) => Show (SEnv s a) where
   show = render . toFix
 
-instance Semigroup (SEnv a) where
+instance (Eq s, Hashable s) => Semigroup (SEnv s a) where
   s1 <> s2 = SE $ M.union (seBinds s1) (seBinds s2)
 
-instance Monoid (SEnv a) where
+instance (Eq s, Hashable s) => Monoid (SEnv s a) where
   mempty        = SE M.empty
 
 instance Semigroup BindEnv where
@@ -300,12 +300,12 @@ instance Fixpoint (IBindEnv) where
 instance NFData Packs
 instance NFData IBindEnv
 instance NFData BindEnv
-instance (NFData a) => NFData (SEnv a)
+instance (NFData s, NFData a) => NFData (SEnv s a)
 
 instance B.Binary Packs
 instance B.Binary IBindEnv
 instance B.Binary BindEnv
-instance (B.Binary a) => B.Binary (SEnv a)
+instance (Hashable s, Eq s, B.Binary s, B.Binary a) => B.Binary (SEnv s a)
 instance (Hashable a, Eq a, B.Binary a) => B.Binary (S.HashSet a) where
   put = B.put . S.toList
   get = S.fromList <$> B.get
