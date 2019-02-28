@@ -76,6 +76,7 @@ Library
                    Language.Fixpoint.Types.Constraints,
                    Language.Fixpoint.Types.Triggers,
                    Language.Fixpoint.Types.Solutions,
+                   Language.Fixpoint.Types.Symbol,
                    Language.Fixpoint.Types.Utils,
                    Language.Fixpoint.Types.Templates,
                    Language.Fixpoint.Types.Graduals,
