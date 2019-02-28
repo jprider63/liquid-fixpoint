@@ -118,6 +118,9 @@ Library
                    Language.Fixpoint.Horn.Solve,
                    Text.PrettyPrint.HughesPJ.Compat
 
+  extensions:    MultiParamTypeClasses
+               , FlexibleContexts
+  
   Other-Modules: Paths_liquid_fixpoint
 
   Build-Depends: base >=4.9.1.0 && <5
