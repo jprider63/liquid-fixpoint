@@ -139,7 +139,7 @@ and also a dot file with the constraint dependency graph:
 This is the field
 
 ```
-     , bs       :: !BindEnv         -- ^ Bind  |-> (Symbol, SortedReft)
+     , bs       :: !BindEnv         -- ^ Bind  |-> (Symbol, SortedReft s)
 ```
 
 or in the .fq files as
@@ -187,7 +187,7 @@ Each `slhs` of a constraint is a `SortedReft`.
   That is represented in the `Expr` type as
 
 ```
-  | PKVar  !KVar !Subst
+  | PKVar  !(KVar s) !(Subst s)
 ```
 
   must appear _only_ at the **top-level** that is not under _any_
@@ -223,8 +223,8 @@ Similarly each `rhs` of a `SubC` must either be a single `$k[...]` or an plain `
 ### Global vs. Distinct Literals
 
 ```
-     , gLits    :: !(SEnv Sort)               -- ^ Global Constant symbols
-     , dLits    :: !(SEnv Sort)       
+     , gLits    :: !(SEnv (Sort s))               -- ^ Global Constant symbols
+     , dLits    :: !(SEnv (Sort s))       
 ```
 
 The _global_ literals `gLits` are symbols that

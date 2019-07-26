@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
-
+{-# LANGUAGE TypeApplications  #-}
 module Main where
 
 import Language.Fixpoint.Types (showFix)
 import Language.Fixpoint.Parse
 import Test.Tasty
 import Test.Tasty.HUnit
+import Data.Void
 import Data.List (intercalate)
 
 main :: IO ()
@@ -58,57 +59,57 @@ testSortP :: TestTree
 testSortP =
   testGroup "SortP"
     [ testCase "FAbs" $
-        show (doParse' sortP "test" "(func(1, [int; @(0)]))") @?= "FAbs 0 (FFunc FInt (FVar 0))"
+        show (doParse' (sortP @Void) "test" "(func(1, [int; @(0)]))") @?= "FAbs 0 (FFunc FInt (FVar 0))"
 
     , testCase "(FAbs)" $
-        show (doParse' sortP "test" "((func(1, [int; @(0)])))") @?= "FAbs 0 (FFunc FInt (FVar 0))"
+        show (doParse' (sortP @Void) "test" "((func(1, [int; @(0)])))") @?= "FAbs 0 (FFunc FInt (FVar 0))"
 
     , testCase "FApp FInt" $
-        show (doParse' sortP "test" "[int]") @?=
+        show (doParse' (sortP @Void) "test" "[int]") @?=
               "FApp (FTC (TC \"[]\" (dummyLoc) (TCInfo {tc_isNum = False, tc_isReal = False, tc_isString = False}))) FInt"
 
     , testCase "bv32" $
-        show (doParse' sortP "test" "BitVec Size32") @?=
+        show (doParse' (sortP @Void) "test" "BitVec Size32") @?=
               "FApp (FTC (TC \"BitVec\" defined from: \"test\" (line 1, column 1) to: \"test\" (line 1, column 8) (TCInfo {tc_isNum = False, tc_isReal = False, tc_isString = False}))) (FTC (TC \"Size32\" defined from: \"test\" (line 1, column 8) to: \"test\" (line 1, column 14) (TCInfo {tc_isNum = False, tc_isReal = False, tc_isString = False})))"
 
     , testCase "bv64" $
-        show (doParse' sortP "test" "BitVec Size64") @?=
+        show (doParse' (sortP @Void) "test" "BitVec Size64") @?=
               "FApp (FTC (TC \"BitVec\" defined from: \"test\" (line 1, column 1) to: \"test\" (line 1, column 8) (TCInfo {tc_isNum = False, tc_isReal = False, tc_isString = False}))) (FTC (TC \"Size64\" defined from: \"test\" (line 1, column 8) to: \"test\" (line 1, column 14) (TCInfo {tc_isNum = False, tc_isReal = False, tc_isString = False})))"
 
     , testCase "FInt int" $
-        show (doParse' sortP "test" "int") @?= "FInt"
+        show (doParse' (sortP @Void) "test" "int") @?= "FInt"
 
     , testCase "FInt Integer" $
-        show (doParse' sortP "test" "Integer") @?= "FInt"
+        show (doParse' (sortP @Void) "test" "Integer") @?= "FInt"
 
     , testCase "FInt Int" $
-        show (doParse' sortP "test" "Int") @?= "FInt"
+        show (doParse' (sortP @Void) "test" "Int") @?= "FInt"
 
     , testCase "FReal real" $
-        show (doParse' sortP "test" "real") @?= "FReal"
+        show (doParse' (sortP @Void) "test" "real") @?= "FReal"
 
     , testCase "FNum num" $
-        show (doParse' sortP "test" "num") @?= "FNum"
+        show (doParse' (sortP @Void) "test" "num") @?= "FNum"
 
     , testCase "FStr" $
-        show (doParse' sortP "test" "Str") @?=
+        show (doParse' (sortP @Void) "test" "Str") @?=
              "FTC (TC \"Str\" (dummyLoc) (TCInfo {tc_isNum = False, tc_isReal = False, tc_isString = True}))"
 
     , testCase "SYMBOL" $
-        show (doParse' sortP "test" "F#y") @?=
+        show (doParse' (sortP @Void) "test" "F#y") @?=
              "FTC (TC \"F#y\" defined from: \"test\" (line 1, column 1) to: \"test\" (line 1, column 4) (TCInfo {tc_isNum = False, tc_isReal = False, tc_isString = False}))"
 
     , testCase "FVar 3" $
-        show (doParse' sortP "test" "@(3)") @?= "FVar 3"
+        show (doParse' (sortP @Void) "test" "@(3)") @?= "FVar 3"
 
     , testCase "FObj " $
-        show (doParse' sortP "test" "foo") @?= "FObj \"foo\""
+        show (doParse' (sortP @Void) "test" "foo") @?= "FObj \"foo\""
 
     , testCase "FObj " $
-        show (doParse' sortP "test" "_foo") @?= "FObj \"_foo\""
+        show (doParse' (sortP @Void) "test" "_foo") @?= "FObj \"_foo\""
 
     , testCase "Coerce0" $
-        show (doParse' predP "test" "v = (coerce (a ~ int) (f x))")
+        show (doParse' (predP @Void) "test" "v = (coerce (a ~ int) (f x))")
           @?= "PAtom Eq (EVar \"v\") (ECoerc (FObj \"a\") FInt (EApp (EVar \"f\") (EVar \"x\")))"
     ]
 
@@ -135,20 +136,20 @@ testFunAppP :: TestTree
 testFunAppP =
   testGroup "FunAppP"
     [ testCase "ECon (litP)" $
-        show (doParse' funAppP "test" "lit \"#x00000008\" (BitVec  Size32)") @?=
+        show (doParse' (funAppP @Void) "test" "lit \"#x00000008\" (BitVec  Size32)") @?=
           "ECon (L \"#x00000008\" (FApp (FTC (TC \"BitVec\" defined from: \"test\" (line 1, column 19) to: \"test\" (line 1, column 27) (TCInfo {tc_isNum = False, tc_isReal = False, tc_isString = False}))) (FTC (TC \"Size32\" defined from: \"test\" (line 1, column 27) to: \"test\" (line 1, column 33) (TCInfo {tc_isNum = False, tc_isReal = False, tc_isString = False})))))"
 
     , testCase "ECon (exprFunSpacesP)" $
-        show (doParse' funAppP "test" "fooBar baz qux") @?= "EApp (EApp (EVar \"fooBar\") (EVar \"baz\")) (EVar \"qux\")"
+        show (doParse' (funAppP @Void) "test" "fooBar baz qux") @?= "EApp (EApp (EVar \"fooBar\") (EVar \"baz\")) (EVar \"qux\")"
 
     , testCase "ECon (exprFunCommasP)" $
-        show (doParse' funAppP "test" "fooBar (baz, qux)") @?= "EApp (EApp (EVar \"fooBar\") (EVar \"baz\")) (EVar \"qux\")"
+        show (doParse' (funAppP @Void) "test" "fooBar (baz, qux)") @?= "EApp (EVar \"fooBar\") (EApp (EApp (EVar \"(,)\") (EVar \"baz\")) (EVar \"qux\"))"
 
     , testCase "ECon (exprFunSemisP)" $
-        show (doParse' funAppP "test" "fooBar ([baz; qux])") @?= "EApp (EApp (EVar \"fooBar\") (EVar \"baz\")) (EVar \"qux\")"
+        show (doParse' (funAppP @Void) "test" "fooBar ([baz; qux])") @?= "EApp (EApp (EVar \"fooBar\") (EVar \"baz\")) (EVar \"qux\")"
 
     , testCase "ECon (simpleAppP)" $
-        show (doParse' funAppP "test" "fooBar (baz + 1)") @?= "EApp (EVar \"fooBar\") (EBin Plus (EVar \"baz\") (ECon (I 1)))"
+        show (doParse' (funAppP @Void) "test" "fooBar (baz + 1)") @?= "EApp (EVar \"fooBar\") (EBin Plus (EVar \"baz\") (ECon (I 1)))"
     ]
 
 -- ---------------------------------------------------------------------
@@ -167,40 +168,40 @@ testExpr0P :: TestTree
 testExpr0P =
   testGroup "expr0P"
     [ testCase "EIte" $
-        show (doParse' expr0P "test" "if true then x else y") @?= "EIte (PAnd []) (EVar \"x\") (EVar \"y\")"
+        show (doParse' (expr0P @Void) "test" "if true then x else y") @?= "EIte (PAnd []) (EVar \"x\") (EVar \"y\")"
 
     , testCase "ESym SL" $
-        show (doParse' expr0P "test" "\"foo\" ") @?= "ESym (SL \"foo\")"
+        show (doParse' (expr0P @Void) "test" "\"foo\" ") @?= "ESym (SL \"foo\")"
 
     , testCase "ECon R" $
-        show (doParse' expr0P "test" "0.0") @?= "ECon (R 0.0)"
+        show (doParse' (expr0P @Void) "test" "0.0") @?= "ECon (R 0.0)"
 
     , testCase "ECon I" $
-        show (doParse' expr0P "test" "0") @?= "ECon (I 0)"
+        show (doParse' (expr0P @Void) "test" "0") @?= "ECon (I 0)"
 
     , testCase "ECon I" $
-        show (doParse' expr0P "test" "0") @?= "ECon (I 0)"
+        show (doParse' (expr0P @Void) "test" "0") @?= "ECon (I 0)"
 
     , testCase "EBot / POr []" $
-        show (doParse' expr0P "test" "_|_") @?= "POr []" -- pattern for "EBot"
+        show (doParse' (expr0P @Void) "test" "_|_") @?= "POr []" -- pattern for "EBot"
 
     , testCase "ELam" $
-        show (doParse' expr0P "test" "\\ foo : Int -> true") @?= "ELam (\"foo\",FInt) (PAnd [])"
+        show (doParse' (expr0P @Void) "test" "\\ foo : Int -> true") @?= "ELam (\"foo\",FInt) (PAnd [])"
 
     , testCase "Expr" $
-        show (doParse' expr0P "test" "(1)") @?= "ECon (I 1)"
+        show (doParse' (expr0P @Void) "test" "(1)") @?= "ECon (I 1)"
 
     , testCase "ECst dcolon" $
-        show (doParse' expr0P "test" "(1 :: Int)") @?= "ECst (ECon (I 1)) FInt"
+        show (doParse' (expr0P @Void) "test" "(1 :: Int)") @?= "ECst (ECon (I 1)) FInt"
 
     , testCase "ECst colon" $
-        show (doParse' expr0P "test" "(1 : Int)") @?= "ECst (ECon (I 1)) FInt"
+        show (doParse' (expr0P @Void) "test" "(1 : Int)") @?= "ECst (ECon (I 1)) FInt"
 
     , testCase "charsExpr EVar" $
-        show (doParse' expr0P "test" "foo") @?= "EVar \"foo\""
+        show (doParse' (expr0P @Void) "test" "foo") @?= "EVar \"foo\""
 
     , testCase "charsExpr ECon" $
-        show (doParse' expr0P "test" "1") @?= "ECon (I 1)"
+        show (doParse' (expr0P @Void) "test" "1") @?= "ECon (I 1)"
     ]
 
 -- ---------------------------------------------------------------------
@@ -251,67 +252,67 @@ testPredP :: TestTree
 testPredP =
   testGroup "predP"
     [ testCase "PTrue" $
-        show (doParse' predP "test" "true") @?= "PAnd []" -- pattern for PTrue
+        show (doParse' (predP @Void) "test" "true") @?= "PAnd []" -- pattern for PTrue
 
     , testCase "PFalse" $
-        show (doParse' predP "test" "false") @?= "POr []" -- pattern for PFalse
+        show (doParse' (predP @Void) "test" "false") @?= "POr []" -- pattern for PFalse
 
    --     , testCase "PGrad / ??" $
-   --       show (doParse' predP "test" "??") @?= "PGrad $\"\\\"test\\\" (line 1, column 3)\"  (PAnd [])"
+   --       show (doParse' (predP @Void) "test" "??") @?= "PGrad $\"\\\"test\\\" (line 1, column 3)\"  (PAnd [])"
    --   "PGrad $\"\\\"test\\\" (line 1, column 3)\"  (GradInfo {gsrc = SS {sp_start = \"test\" (line 1, column 3), sp_stop = \"test\" (line 1, column 3)}, gused = Nothing}) (PAnd [])"
 
     , testCase "kvarPred empty" $
-        show (doParse' predP "test" "$foo") @?= "PKVar $\"foo\" "
+        show (doParse' (predP @Void) "test" "$foo") @?= "PKVar $\"foo\" "
 
     , testCase "kvarPred one" $
-        show (doParse' predP "test" "$foo  [x := 1]") @?= "PKVar $\"foo\" [x:=1]"
+        show (doParse' (predP @Void) "test" "$foo  [x := 1]") @?= "PKVar $\"foo\" [x:=1]"
 
     , testCase "kvarPred two" $
-        show (doParse' predP "test" "$foo  [x := 1] [ y := true ]") @?= "PKVar $\"foo\" [x:=1][y:=true]"
+        show (doParse' (predP @Void) "test" "$foo  [x := 1] [ y := true ]") @?= "PKVar $\"foo\" [x:=1][y:=true]"
 
     , testCase "fastIf" $
-        show (doParse' predP "test" "if true then true else false" ) @?=
+        show (doParse' (predP @Void) "test" "if true then true else false" ) @?=
           -- note conversion
           "PAnd [PImp (PAnd []) (PAnd []),PImp (PNot (PAnd [])) (POr [])]"
 
     , testCase "brel" $
-        show (doParse' predP "test" "1 == 2") @?= "PAtom Eq (ECon (I 1)) (ECon (I 2))"
+        show (doParse' (predP @Void) "test" "1 == 2") @?= "PAtom Eq (ECon (I 1)) (ECon (I 2))"
 
     , testCase "parens pred" $
-        show (doParse' predP "test" "((1 == 2))") @?= "PAtom Eq (ECon (I 1)) (ECon (I 2))"
+        show (doParse' (predP @Void) "test" "((1 == 2))") @?= "PAtom Eq (ECon (I 1)) (ECon (I 2))"
 
     , testCase "? expr" $
-        show (doParse' predP "test" "? (1+2)") @?= "EBin Plus (ECon (I 1)) (ECon (I 2))"
+        show (doParse' (predP @Void) "test" "? (1+2)") @?= "EBin Plus (ECon (I 1)) (ECon (I 2))"
 
     , testCase "funApp 1" $
-        show (doParse' predP "test" "f a b") @?= "EApp (EApp (EVar \"f\") (EVar \"a\")) (EVar \"b\")"
+        show (doParse' (predP @Void) "test" "f a b") @?= "EApp (EApp (EVar \"f\") (EVar \"a\")) (EVar \"b\")"
 
     , testCase "funApp 2" $
-        show (doParse' predP "test" "f (a, b)") @?= "EApp (EApp (EVar \"f\") (EVar \"a\")) (EVar \"b\")"
+        show (doParse' (predP @Void) "test" "f (a, b)") @?= "EApp (EVar \"f\") (EApp (EApp (EVar \"(,)\") (EVar \"a\")) (EVar \"b\"))"
 
     , testCase "funApp 3" $
-        show (doParse' predP "test" "f ([a; b])") @?= "EApp (EApp (EVar \"f\") (EVar \"a\")) (EVar \"b\")"
+        show (doParse' (predP @Void) "test" "f ([a; b])") @?= "EApp (EApp (EVar \"f\") (EVar \"a\")) (EVar \"b\")"
 
     , testCase "symbol" $
-        show (doParse' predP "test" "f") @?= "EVar \"f\""
+        show (doParse' (predP @Void) "test" "f") @?= "EVar \"f\""
 
     , testCase "&& 0" $
-        show (doParse' predP "test" "&& []") @?= "PAnd []"
+        show (doParse' (predP @Void) "test" "&& []") @?= "PAnd []"
 
     , testCase "&& 1" $
-        show (doParse' predP "test" "&& [x]") @?= "PAnd [EVar \"x\"]"
+        show (doParse' (predP @Void) "test" "&& [x]") @?= "PAnd [EVar \"x\"]"
 
     , testCase "&& 2" $
-        show (doParse' predP "test" "&& [x;y]") @?= "PAnd [EVar \"x\",EVar \"y\"]"
+        show (doParse' (predP @Void) "test" "&& [x;y]") @?= "PAnd [EVar \"x\",EVar \"y\"]"
 
     , testCase "|| 0" $
-        show (doParse' predP "test" "|| []") @?= "POr []"
+        show (doParse' (predP @Void) "test" "|| []") @?= "POr []"
 
     , testCase "|| 1" $
-        show (doParse' predP "test" "|| [x]") @?= "POr [EVar \"x\"]"
+        show (doParse' (predP @Void) "test" "|| [x]") @?= "POr [EVar \"x\"]"
 
     , testCase "|| 2" $
-        show (doParse' predP "test" "|| [x;y]") @?= "POr [EVar \"x\",EVar \"y\"]"
+        show (doParse' (predP @Void) "test" "|| [x;y]") @?= "POr [EVar \"x\",EVar \"y\"]"
     ]
 
 
@@ -326,12 +327,12 @@ data Vec 1 = [
 
 testDeclP :: TestTree
 testDeclP = testGroup "dataDeclP"
-  [ mkT "fld0"  dataFieldP fld0
-  , mkT "fld1"  dataFieldP fld1
-  , mkT "fld2"  dataFieldP fld2
-  , mkT "ctor0" dataCtorP  ctor0
-  , mkT "ctor1" dataCtorP  ctor1
-  , mkT "decl0" dataDeclP decl0
+  [ mkT "fld0"  (dataFieldP @Void) fld0
+  , mkT "fld1"  (dataFieldP @Void) fld1
+  , mkT "fld2"  (dataFieldP @Void) fld2
+  , mkT "ctor0" (dataCtorP @Void)  ctor0
+  , mkT "ctor1" (dataCtorP @Void)  ctor1
+  , mkT "decl0" (dataDeclP @Void) decl0
   ]
   where
     mkT name p t = testCase name $ showFix (doParse' p "test" t) @?= t

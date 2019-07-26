@@ -1,5 +1,7 @@
-{-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE DeriveGeneric       #-}
+{-# LANGUAGE OverloadedStrings   #-}
 
 -- | This is a wrapper around IO that permits SMT queries
 
@@ -52,6 +54,7 @@ import           Data.List            (partition)
 import           Text.PrettyPrint.HughesPJ (text)
 import           Control.Monad.State.Strict
 import qualified Data.HashMap.Strict as M
+import           Data.Hashable
 import           Data.Maybe (catMaybes)
 import           Control.Exception.Base (bracket)
 
@@ -59,11 +62,11 @@ import           Control.Exception.Base (bracket)
 -- | Solver Monadic API --------------------------------------------------------
 --------------------------------------------------------------------------------
 
-type SolveM = StateT SolverState IO
+type SolveM s = StateT (SolverState s) IO
 
-data SolverState = SS 
-  { ssCtx     :: !Context          -- ^ SMT Solver Context
-  , ssBinds   :: !F.BindEnv        -- ^ All variables and types
+data SolverState s = SS 
+  { ssCtx     :: !(Context s)          -- ^ SMT Solver Context
+  , ssBinds   :: !(F.BindEnv s)        -- ^ All variables and types
   , ssStats   :: !Stats            -- ^ Solver Statistics
   }
 
@@ -77,7 +80,7 @@ data Stats = Stats
 
 instance NFData Stats
 
-stats0    :: F.GInfo c b -> Stats
+stats0    :: F.GInfo s c b -> Stats
 stats0 fi = Stats nCs 0 0 0 0
   where
     nCs   = M.size $ F.cm fi
@@ -92,7 +95,7 @@ instance F.PTable Stats where
                         ]
 
 --------------------------------------------------------------------------------
-runSolverM :: Config -> SolverInfo b c -> SolveM a -> IO a
+runSolverM :: (SMTLIB2 s s, Hashable s, F.PPrint s, F.Fixpoint s, Ord s, Show s) => Config -> SolverInfo s b c -> SolveM s a -> IO a
 --------------------------------------------------------------------------------
 runSolverM cfg sI act =
   bracket acquire release $ \ctx -> do
@@ -113,34 +116,34 @@ runSolverM cfg sI act =
 
 
 --------------------------------------------------------------------------------
-getBinds :: SolveM F.BindEnv 
+getBinds :: SolveM s (F.BindEnv s)
 --------------------------------------------------------------------------------
 getBinds = ssBinds <$> get
 
 --------------------------------------------------------------------------------
-getIter :: SolveM Int
+getIter :: SolveM s Int
 --------------------------------------------------------------------------------
 getIter = numIter . ssStats <$> get
 
 --------------------------------------------------------------------------------
-incIter, incBrkt :: SolveM ()
+incIter, incBrkt :: SolveM s ()
 --------------------------------------------------------------------------------
 incIter   = modifyStats $ \s -> s {numIter = 1 + numIter s}
 incBrkt   = modifyStats $ \s -> s {numBrkt = 1 + numBrkt s}
 
 --------------------------------------------------------------------------------
-incChck, incVald :: Int -> SolveM ()
+incChck, incVald :: Int -> SolveM s ()
 --------------------------------------------------------------------------------
 incChck n = modifyStats $ \s -> s {numChck = n + numChck s}
 incVald n = modifyStats $ \s -> s {numVald = n + numVald s}
 
-withContext :: (Context -> IO a) -> SolveM a
+withContext :: (Context s -> IO a) -> SolveM s a
 withContext k = (lift . k) =<< getContext
 
-getContext :: SolveM Context
+getContext :: SolveM s (Context s)
 getContext = ssCtx <$> get
 
-modifyStats :: (Stats -> Stats) -> SolveM ()
+modifyStats :: (Stats -> Stats) -> SolveM s ()
 modifyStats f = modify $ \s -> s { ssStats = f (ssStats s) }
 
 --------------------------------------------------------------------------------
@@ -149,7 +152,7 @@ modifyStats f = modify $ \s -> s { ssStats = f (ssStats s) }
 -- | `filterRequired [(x1, p1),...,(xn, pn)] q` returns a minimal list [xi] s.t.
 --   /\ [pi] => q
 --------------------------------------------------------------------------------
-filterRequired :: F.Cand a -> F.Expr -> SolveM [a]
+filterRequired :: F.Cand s a -> F.Expr s -> SolveM s [a]
 --------------------------------------------------------------------------------
 filterRequired = error "TBD:filterRequired"
 
@@ -175,7 +178,7 @@ filterRequired = error "TBD:filterRequired"
 --------------------------------------------------------------------------------
 -- | `filterValid p [(x1, q1),...,(xn, qn)]` returns the list `[ xi | p => qi]`
 --------------------------------------------------------------------------------
-filterValid :: F.SrcSpan -> F.Expr -> F.Cand a -> SolveM [a]
+filterValid :: (F.PPrint s, F.Fixpoint s, Ord s, SMTLIB2 s s, Hashable s, Show s) => F.SrcSpan -> F.Expr s -> F.Cand s a -> SolveM s [a]
 --------------------------------------------------------------------------------
 filterValid sp p qs = do
   qs' <- withContext $ \me ->
@@ -187,7 +190,7 @@ filterValid sp p qs = do
   incVald (length qs')
   return qs'
 
-filterValid_ :: F.SrcSpan -> F.Expr -> F.Cand a -> Context -> IO [a]
+filterValid_ :: (Show s, Hashable s, SMTLIB2 s s, Ord s, F.Fixpoint s, F.PPrint s) => F.SrcSpan -> F.Expr s -> F.Cand s a -> Context s -> IO [a]
 filterValid_ sp p qs me = catMaybes <$> do
   smtAssert me p
   forM qs $ \(q, x) ->
@@ -201,7 +204,7 @@ filterValid_ sp p qs me = catMaybes <$> do
 -- | `filterValidGradual ps [(x1, q1),...,(xn, qn)]` returns the list `[ xi | p => qi]`
 -- | for some p in the list ps
 --------------------------------------------------------------------------------
-filterValidGradual :: [F.Expr] -> F.Cand a -> SolveM [a]
+filterValidGradual :: (F.PPrint s, F.Fixpoint s, Ord s, SMTLIB2 s s, Hashable s, Show s) => [F.Expr s] -> F.Cand s a -> SolveM s [a]
 --------------------------------------------------------------------------------
 filterValidGradual p qs = do
   qs' <- withContext $ \me ->
@@ -213,17 +216,17 @@ filterValidGradual p qs = do
   incVald (length qs')
   return qs'
 
-filterValidGradual_ :: [F.Expr] -> F.Cand a -> Context -> IO [a]
+filterValidGradual_ :: forall s a. (F.PPrint s, F.Fixpoint s, Ord s, Show s, Hashable s, SMTLIB2 s s) => [F.Expr s] -> F.Cand s a -> Context s -> IO [a]
 filterValidGradual_ ps qs me
   = (map snd . fst) <$> foldM partitionCandidates ([], qs) ps
   where
-    partitionCandidates :: (F.Cand a, F.Cand a) -> F.Expr -> IO (F.Cand a, F.Cand a)
+    partitionCandidates :: (F.Cand s a, F.Cand s a) -> F.Expr s -> IO (F.Cand s a, F.Cand s a)
     partitionCandidates (ok, candidates) p = do
       (valids', invalids')  <- partition snd <$> filterValidOne_ p candidates me
       let (valids, invalids) = (fst <$> valids', fst <$> invalids')
       return (ok ++ valids, invalids)
 
-filterValidOne_ :: F.Expr -> F.Cand a -> Context -> IO [((F.Expr, a), Bool)]
+filterValidOne_ :: (Show s, Hashable s, SMTLIB2 s s, Ord s, F.Fixpoint s, F.PPrint s) => F.Expr s -> F.Cand s a -> Context s -> IO [((F.Expr s, a), Bool)]
 filterValidOne_ p qs me = do
   smtAssert me p
   forM qs $ \(q, x) ->
@@ -232,13 +235,13 @@ filterValidOne_ p qs me = do
       valid <- smtCheckUnsat me
       return $ ((q, x), valid)
 
-smtEnablembqi :: SolveM ()
+smtEnablembqi :: SolveM s ()
 smtEnablembqi
   = withContext $ \me ->
       smtWrite me "(set-option :smt.mbqi true)"
 
 --------------------------------------------------------------------------------
-checkSat :: F.Expr -> SolveM  Bool
+checkSat :: (F.PPrint s, F.Fixpoint s, Ord s, SMTLIB2 s s, Hashable s, Show s) => F.Expr s -> SolveM s  Bool
 --------------------------------------------------------------------------------
 checkSat p
   = withContext $ \me ->
@@ -246,20 +249,20 @@ checkSat p
         smtCheckSat me p
 
 --------------------------------------------------------------------------------
-assumesAxioms :: [F.Triggered F.Expr] -> SolveM ()
+assumesAxioms :: (Show s, Hashable s, SMTLIB2 s s, Ord s, F.Fixpoint s, F.PPrint s) => [F.Triggered (F.Expr s)] -> SolveM s ()
 --------------------------------------------------------------------------------
 assumesAxioms es = withContext $ \me -> forM_  es $ smtAssertAxiom me
 
 
 ---------------------------------------------------------------------------
-stats :: SolveM Stats
+stats :: SolveM s Stats
 ---------------------------------------------------------------------------
 stats = ssStats <$> get
 
 ---------------------------------------------------------------------------
-tickIter :: Bool -> SolveM Int
+tickIter :: Bool -> SolveM s Int
 ---------------------------------------------------------------------------
 tickIter newScc = progIter newScc >> incIter >> getIter
 
-progIter :: Bool -> SolveM ()
+progIter :: Bool -> SolveM s ()
 progIter newScc = lift $ when newScc progressTick

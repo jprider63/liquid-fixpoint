@@ -1,3 +1,5 @@
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE TypeSynonymInstances #-}
@@ -11,7 +13,7 @@ module Language.Fixpoint.Types.Visitor (
      Visitor (..)
   ,  Visitable (..)
 
-  -- * Extracting Symbolic Constants (String Literals)
+  -- * Extracting FixSymbolic Constants (String Literals)
   ,  SymConsts (..)
 
   -- * Default Visitor
@@ -54,6 +56,7 @@ import           Data.Semigroup      (Semigroup (..))
 import           Control.Monad.State.Strict
 import qualified Data.HashSet        as S
 import qualified Data.HashMap.Strict as M
+import           Data.Hashable
 import qualified Data.List           as L
 import           Language.Fixpoint.Types hiding (mapSort)
 import qualified Language.Fixpoint.Misc as Misc
@@ -61,19 +64,19 @@ import qualified Language.Fixpoint.Misc as Misc
 
 
 
-data Visitor acc ctx = Visitor {
+data Visitor s acc ctx = Visitor {
  -- | Context @ctx@ is built in a "top-down" fashion; not "across" siblings
-    ctxExpr :: ctx -> Expr -> ctx
+    ctxExpr :: ctx -> Expr s -> ctx
 
   -- | Transforms can access current @ctx@
-  , txExpr  :: ctx -> Expr -> Expr
+  , txExpr  :: ctx -> Expr s -> Expr s
 
   -- | Accumulations can access current @ctx@; @acc@ value is monoidal
-  , accExpr :: ctx -> Expr -> acc
+  , accExpr :: ctx -> Expr s -> acc
   }
 
 ---------------------------------------------------------------------------------
-defaultVisitor :: (Monoid acc) => Visitor acc ctx
+defaultVisitor :: (Monoid acc) => Visitor s acc ctx
 ---------------------------------------------------------------------------------
 defaultVisitor = Visitor
   { ctxExpr    = const
@@ -81,16 +84,15 @@ defaultVisitor = Visitor
   , accExpr    = \_ _ -> mempty
   }
 
-
 ------------------------------------------------------------------------
 
-fold         :: (Visitable t, Monoid a) => Visitor a ctx -> ctx -> a -> t -> a
+fold         :: (Visitable s t, Monoid a) => Visitor s a ctx -> ctx -> a -> t -> a
 fold v c a t = snd $ execVisitM v c a visit t
 
-trans        :: (Visitable t, Monoid a) => Visitor a ctx -> ctx -> a -> t -> t
+trans        :: (Visitable s t, Monoid a) => Visitor s a ctx -> ctx -> a -> t -> t
 trans v c _ z = fst $ execVisitM v c mempty visit z
 
-execVisitM :: Visitor a ctx -> ctx -> a -> (Visitor a ctx -> ctx -> t -> State a t) -> t -> (t, a)
+execVisitM :: Visitor s a ctx -> ctx -> a -> (Visitor s a ctx -> ctx -> t -> State a t) -> t -> (t, a)
 execVisitM v c a f x = runState (f v c x) a
 
 type VisitM acc = State acc
@@ -112,63 +114,63 @@ f <$$> xs = f Misc.<$$> xs
   -- !ys <- f <$$> xs
   -- return (y:ys)
 ------------------------------------------------------------------------------
-class Visitable t where
-  visit :: (Monoid a) => Visitor a c -> c -> t -> VisitM a t
+class Visitable s t | t -> s where
+  visit :: (Monoid a) => Visitor s a c -> c -> t -> VisitM a t
 
-instance Visitable Expr where
+instance Visitable s (Expr s) where
   visit = visitExpr
 
-instance Visitable Reft where
+instance Visitable s (Reft s) where
   visit v c (Reft (x, ra)) = (Reft . (x, )) <$> visit v c ra
 
-instance Visitable SortedReft where
+instance Visitable s (SortedReft s) where
   visit v c (RR t r) = RR t <$> visit v c r
 
-instance Visitable (Symbol, SortedReft) where
+instance Visitable s (Symbol s, SortedReft s) where
   visit v c (sym, sr) = (sym, ) <$> visit v c sr
 
-instance Visitable BindEnv where
+instance Visitable s (BindEnv s) where
   visit v c = mapM (visit v c)
 
 ---------------------------------------------------------------------------------
 -- WARNING: these instances were written for mapKVars over GInfos only;
 -- check that they behave as expected before using with other clients.
-instance Visitable (SimpC a) where
+instance Visitable s (SimpC s a) where
   visit v c x = do
     rhs' <- visit v c (_crhs x)
     return x { _crhs = rhs' }
 
-instance Visitable (SubC a) where
+instance Visitable s (SubC s a) where
   visit v c x = do
     lhs' <- visit v c (slhs x)
     rhs' <- visit v c (srhs x)
     return x { slhs = lhs', srhs = rhs' }
 
-instance (Visitable (c a)) => Visitable (GInfo c a) where
+instance (Visitable s (c a)) => Visitable s (GInfo s c a) where
   visit v c x = do
     cm' <- mapM (visit v c) (cm x)
     bs' <- visit v c (bs x)
     ae' <- visit v c (ae x) 
     return x { cm = cm', bs = bs', ae = ae' }
 
-instance Visitable AxiomEnv where 
+instance Visitable s (AxiomEnv s) where 
   visit v c x = do 
     eqs'    <- mapM (visit v c) (aenvEqs   x) 
     simpls' <- mapM (visit v c) (aenvSimpl x) 
     return x { aenvEqs = eqs' , aenvSimpl = simpls'} 
 
-instance Visitable Equation where 
+instance Visitable s (Equation s) where 
   visit v c eq = do 
     body' <- visit v c (eqBody eq) 
     return eq { eqBody = body' } 
 
-instance Visitable Rewrite where 
+instance Visitable s (Rewrite s) where 
   visit v c rw = do 
     body' <- visit v c (smBody rw) 
     return rw { smBody = body' } 
 
 ---------------------------------------------------------------------------------
-visitExpr :: (Monoid a) => Visitor a ctx -> ctx -> Expr -> VisitM a Expr
+visitExpr :: (Monoid a) => Visitor s a ctx -> ctx -> Expr s -> VisitM a (Expr s)
 visitExpr !v    = vE
   where
     vE !c !e    = do {-# SCC "visitExpr.vE.accum" #-} accum acc
@@ -199,12 +201,12 @@ visitExpr !v    = vE
     step _  !p@(PKVar _ _)   = return p
     step !c !(PGrad k su i e) = PGrad k su i <$> vE c e
 
-mapKVars :: Visitable t => (KVar -> Maybe Expr) -> t -> t
+mapKVars :: (Ord s, Fixpoint s, Hashable s, Visitable s t, Show s) => (KVar s -> Maybe (Expr s)) -> t -> t
 mapKVars f = mapKVars' f'
   where
     f' (kv', _) = f kv'
 
-mapKVars' :: Visitable t => ((KVar, Subst) -> Maybe Expr) -> t -> t
+mapKVars' :: (Show s, Visitable s t, Hashable s, Ord s, Fixpoint s) => ((KVar s, Subst s) -> Maybe (Expr s)) -> t -> t
 mapKVars' f            = trans kvVis () ()
   where
     kvVis              = defaultVisitor { txExpr = txK }
@@ -216,7 +218,7 @@ mapKVars' f            = trans kvVis () ()
 
 
 
-mapGVars' :: Visitable t => ((KVar, Subst) -> Maybe Expr) -> t -> t
+mapGVars' :: (Show s, Fixpoint s, Ord s, Hashable s, Visitable s t) => ((KVar s, Subst s) -> Maybe (Expr s)) -> t -> t
 mapGVars' f            = trans kvVis () ()
   where
     kvVis              = defaultVisitor { txExpr = txK }
@@ -224,11 +226,11 @@ mapGVars' f            = trans kvVis () ()
       | Just p' <- f (k, su) = subst su p'
     txK _ p            = p
 
-mapExpr :: Visitable t => (Expr -> Expr) -> t -> t
+mapExpr :: Visitable s t => (Expr s -> Expr s) -> t -> t
 mapExpr f = trans (defaultVisitor {txExpr = const f}) () ()
 
 
-mapMExpr :: (Monad m) => (Expr -> m Expr) -> Expr -> m Expr
+mapMExpr :: (Monad m) => (Expr s -> m (Expr s)) -> Expr s -> m (Expr s)
 mapMExpr f = go
   where
     go e@(ESym _)      = f e
@@ -254,7 +256,7 @@ mapMExpr f = go
     go (PAnd  ps)      = f =<< (PAnd        <$> (go <$$> ps)              )
     go (POr  ps)       = f =<< (POr         <$> (go <$$> ps)              )
 
-mapKVarSubsts :: Visitable t => (KVar -> Subst -> Subst) -> t -> t
+mapKVarSubsts :: Visitable s t => (KVar s -> Subst s -> Subst s) -> t -> t
 mapKVarSubsts f          = trans kvVis () ()
   where
     kvVis                = defaultVisitor { txExpr = txK }
@@ -271,72 +273,72 @@ instance Monoid MInt where
   mempty  = MInt 0
   mappend = (<>)
 
-size :: Visitable t => t -> Integer
+size :: Visitable s t => t -> Integer
 size t    = n
   where
     MInt n = fold szV () mempty t
-    szV    = (defaultVisitor :: Visitor MInt t) { accExpr = \ _ _ -> MInt 1 }
+    szV    = (defaultVisitor :: Visitor s MInt t) { accExpr = \ _ _ -> MInt 1 }
 
 
-lamSize :: Visitable t => t -> Integer
+lamSize :: Visitable s t => t -> Integer
 lamSize t    = n
   where
     MInt n = fold szV () mempty t
-    szV    = (defaultVisitor :: Visitor MInt t) { accExpr = accum }
+    szV    = (defaultVisitor :: Visitor s MInt t) { accExpr = accum }
     accum _ (ELam _ _) = MInt 1
     accum _ _          = MInt 0
 
-eapps :: Visitable t => t -> [Expr]
+eapps :: Visitable s t => t -> [Expr s]
 eapps                 = fold eappVis () []
   where
-    eappVis              = (defaultVisitor :: Visitor [KVar] t) { accExpr = eapp' }
+    eappVis              = (defaultVisitor :: Visitor s [KVar s] t) { accExpr = eapp' }
     eapp' _ e@(EApp _ _) = [e]
     eapp' _ _            = []
 
-kvars :: Visitable t => t -> [KVar]
+kvars :: Visitable s t => t -> [KVar s]
 kvars                 = fold kvVis () []
   where
-    kvVis             = (defaultVisitor :: Visitor [KVar] t) { accExpr = kv' }
+    kvVis             = (defaultVisitor :: Visitor s [KVar s] t) { accExpr = kv' }
     kv' _ (PKVar k _)     = [k]
     kv' _ (PGrad k _ _ _) = [k]
     kv' _ _               = []
 
-envKVars :: (TaggedC c a) => BindEnv -> c a -> [KVar]
+envKVars :: (Hashable s, Eq s, TaggedC s c a) => BindEnv s -> c a -> [KVar s]
 envKVars be c = squish [ kvs sr |  (_, sr) <- clhs be c]
   where
     squish    = S.toList  . S.fromList . concat
     kvs       = kvars . sr_reft
 
-envKVarsN :: (TaggedC c a) => BindEnv -> c a -> [(KVar, Int)]
+envKVarsN :: (Hashable s, Eq s, TaggedC s c a) => BindEnv s -> c a -> [(KVar s, Int)]
 envKVarsN be c = tally [ kvs sr |  (_, sr) <- clhs be c]
   where
     tally      = Misc.count . concat
     kvs        = kvars . sr_reft
 
-rhsKVars :: (TaggedC c a) => c a -> [KVar]
+rhsKVars :: (TaggedC s c a) => c a -> [KVar s]
 rhsKVars = kvars . crhs -- rhsCs
 
-isKvarC :: (TaggedC c a) => c a -> Bool
+isKvarC :: (Eq s, TaggedC s c a) => c a -> Bool
 isKvarC = all isKvar . conjuncts . crhs
 
-isConcC :: (TaggedC c a) => c a -> Bool
+isConcC :: (Eq s, TaggedC s c a) => c a -> Bool
 isConcC = all isConc . conjuncts . crhs
 
-isKvar :: Expr -> Bool
+isKvar :: Expr s -> Bool
 isKvar (PKVar {}) = True
 isKvar (PGrad {}) = True
 isKvar _          = False
 
-isConc :: Expr -> Bool
+isConc :: Expr s -> Bool
 isConc = null . kvars
 
-stripCasts :: (Visitable t) => t -> t
+stripCasts :: (Visitable s t) => t -> t
 stripCasts = trans (defaultVisitor { txExpr = const go }) () ()
   where
     go (ECst e _) = e
     go e          = e
 
--- stripCasts :: Expr -> Expr
+-- stripCasts :: Expr s -> Expr s
 -- stripCasts = mapExpr go
 --  where
 --    go (ECst e _) = e
@@ -345,11 +347,11 @@ stripCasts = trans (defaultVisitor { txExpr = const go }) () ()
 --------------------------------------------------------------------------------
 -- | @CoSub@ is a map from (coercion) ty-vars represented as 'FObj s'
 --   to the ty-vars that they should be substituted with. Note the
---   domain and range are both Symbol and not the Int used for real ty-vars.
+--   domain and range are both FixSymbol and not the Int used for real ty-vars.
 --------------------------------------------------------------------------------
-type CoSub = M.HashMap Symbol Sort 
+type CoSub s = M.HashMap (Symbol s) (Sort s) 
 
-applyCoSub :: CoSub -> Expr -> Expr
+applyCoSub :: (Eq s, Hashable s) => CoSub s -> Expr s -> Expr s
 applyCoSub coSub      = mapExpr fE
   where
     fE (ECoerc s t e) = ECoerc  (txS s) (txS t) e
@@ -363,7 +365,7 @@ applyCoSub coSub      = mapExpr fE
 ---------------------------------------------------------------------------------
 -- | Visitors over @Sort@
 ---------------------------------------------------------------------------------
-foldSort :: (a -> Sort -> a) -> a -> Sort -> a
+foldSort :: (a -> Sort s -> a) -> a -> Sort s -> a
 foldSort f = step
   where
     step b t           = go (f b t) t
@@ -372,7 +374,7 @@ foldSort f = step
     go b (FAbs _ t)    = go b t
     go b _             = b
 
-mapSort :: (Sort -> Sort) -> Sort -> Sort
+mapSort :: (Sort s -> Sort s) -> Sort s -> Sort s
 mapSort f = step
   where
     step !x           = go (f x)
@@ -381,55 +383,55 @@ mapSort f = step
     go !(FAbs i t)    = FAbs i (step t)
     go !t             = t
 
-foldDataDecl :: (a -> Sort -> a) -> a -> DataDecl -> a
+foldDataDecl :: (a -> Sort s -> a) -> a -> DataDecl s -> a
 foldDataDecl f acc = L.foldl' f acc . dataDeclSorts
 
-dataDeclSorts :: DataDecl -> [Sort]
+dataDeclSorts :: DataDecl s -> [Sort s]
 dataDeclSorts = concatMap dataCtorSorts . ddCtors
 
-dataCtorSorts :: DataCtor -> [Sort]
+dataCtorSorts :: DataCtor s -> [Sort s]
 dataCtorSorts = map dfSort . dcFields
 ---------------------------------------------------------------
 -- | String Constants -----------------------------------------
 ---------------------------------------------------------------
 
--- symConstLits    :: FInfo a -> [(Symbol, Sort)]
+-- symConstLits    :: FInfo s a -> [(Symbol s, Sort s)]
 -- symConstLits fi = [(symbol c, strSort) | c <- symConsts fi]
 
 class SymConsts a where
   symConsts :: a -> [SymConst]
 
--- instance  SymConsts (FInfo a) where
-instance (SymConsts (c a)) => SymConsts (GInfo c a) where
+-- instance  SymConsts (FInfo s a) where
+instance (SymConsts (c a)) => SymConsts (GInfo s c a) where
   symConsts fi = Misc.sortNub $ csLits ++ bsLits ++ qsLits
     where
       csLits   = concatMap symConsts $ M.elems  $  cm    fi
       bsLits   = symConsts           $ bs                fi
       qsLits   = concatMap symConsts $ qBody   <$> quals fi
 
-instance SymConsts BindEnv where
+instance SymConsts (BindEnv s) where
   symConsts    = concatMap (symConsts . snd) . M.elems . beBinds
 
-instance SymConsts (SubC a) where
+instance SymConsts (SubC s a) where
   symConsts c  = symConsts (slhs c) ++
                  symConsts (srhs c)
 
-instance SymConsts (SimpC a) where
+instance SymConsts (SimpC s a) where
   symConsts c  = symConsts (crhs c)
 
-instance SymConsts SortedReft where
+instance SymConsts (SortedReft s) where
   symConsts = symConsts . sr_reft
 
-instance SymConsts Reft where
+instance SymConsts (Reft s) where
   symConsts (Reft (_, ra)) = getSymConsts ra
 
 
-instance SymConsts Expr where
+instance SymConsts (Expr s) where
   symConsts = getSymConsts
 
-getSymConsts :: Visitable t => t -> [SymConst]
+getSymConsts :: Visitable s t => t -> [SymConst]
 getSymConsts         = fold scVis () []
   where
-    scVis            = (defaultVisitor :: Visitor [SymConst] t)  { accExpr = sc }
+    scVis            = (defaultVisitor :: Visitor s [SymConst] t)  { accExpr = sc }
     sc _ (ESym c)    = [c]
     sc _ _           = []

@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable         #-}
 {-# LANGUAGE DeriveGeneric              #-}
+{-# LANGUAGE DeriveFunctor              #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
@@ -9,6 +10,7 @@
 {-# LANGUAGE ViewPatterns               #-}
 {-# LANGUAGE BangPatterns               #-}
 {-# LANGUAGE PatternGuards              #-}
+{-# LANGUAGE StandaloneDeriving #-}
 
 
 -- | This module contains Haskell variables representing globally visible names.
@@ -20,10 +22,17 @@ module Language.Fixpoint.Types.Names (
 
   -- * Symbols
     Symbol
-  , Symbolic (..)
+  , Symbol' (..)
+  , FixSymbol
+  , FixSymbolic (..)
   , LocSymbol
+  , LocFixSymbol
   , LocText
+  , IsListConName (..)
+  , dropLoc
   , symbolicString
+  , liftFixFun
+  , encode
 
   -- * Conversion to/from Text
   , symbolSafeText
@@ -139,6 +148,7 @@ import           GHC.Generics                (Generic)
 import           Text.PrettyPrint.HughesPJ   (text)
 import           Language.Fixpoint.Types.PrettyPrint
 import           Language.Fixpoint.Types.Spans
+import           Language.Fixpoint.Types.Errors (panic)
 
 ---------------------------------------------------------------
 -- | Symbols --------------------------------------------------
@@ -161,62 +171,105 @@ type SafeText = T.Text
 --
 --   where i is a unique integer (for each text)
 
-data Symbol
+data FixSymbol
   = S { _symbolId      :: !Id
       , symbolRaw     :: !T.Text
       , symbolEncoded :: !T.Text
       } deriving (Data, Typeable, Generic)
 
-instance Eq Symbol where
+
+data Symbol' fs s
+  = FS fs -- ^ Fixpoint generated symbol
+  | AS s         -- ^ (Abstract) Symbol from source language
+  deriving (Data, Typeable, Generic, Functor)
+
+type Symbol = Symbol' FixSymbol
+
+deriving instance (Eq s, Eq fs) => Eq (Symbol' fs s)
+deriving instance (Ord s, Ord fs) => Ord (Symbol' fs s)
+
+
+-- | transforming FixSymbol while leaving source symbol unchanged
+liftFixFun :: (FixSymbol -> FixSymbol) -> Symbol s -> Symbol s
+liftFixFun f (FS s) = FS (f s)
+liftFixFun _ a = a
+
+instance Loc s => Loc (LocSymbol s) where
+  srcSpan (FS s) = srcSpan s
+  srcSpan (AS s) = srcSpan s
+
+instance (Show fs, Show s) => Show (Symbol' fs s) where
+  show (FS s) = show s
+  show (AS as) = show as
+
+-- instance IsString (Symbol s) where
+--   fromString = FS . fromString
+
+instance Eq FixSymbol where
   S i _ _ == S j _ _ = i == j
 
-instance Ord Symbol where
+instance Ord FixSymbol where
   -- compare (S i _ _) (S j _ _) = compare i j
   -- compare s1 s2 = compare (symbolString s1) (symbolString s2)
   compare s1 s2 = compare (symbolText s1) (symbolText s2)
 
-instance Interned Symbol where
-  type Uninterned Symbol = T.Text
-  newtype Description Symbol = DT T.Text deriving (Eq)
+instance Interned FixSymbol where
+  type Uninterned FixSymbol = T.Text
+  newtype Description FixSymbol = DT T.Text deriving (Eq)
   describe     = DT
   identify i t = S i t (encode t)
   cache        = sCache
 
-instance Uninternable Symbol where
+instance Uninternable FixSymbol where
   unintern (S _ t _) = t
 
-instance Hashable (Description Symbol) where
+instance Hashable (Description FixSymbol) where
   hashWithSalt s (DT t) = hashWithSalt s t
 
-instance Hashable Symbol where
+instance Hashable FixSymbol where
   -- NOTE: hash based on original text rather than id
   hashWithSalt s (S _ t _) = hashWithSalt s t
 
-instance NFData Symbol where
+
+instance (Hashable s, Hashable fs) => Hashable (Symbol' fs s)
+
+instance NFData FixSymbol where
   rnf (S {}) = ()
 
-instance Binary Symbol where
+instance (NFData fs, NFData s) => NFData (Symbol' fs s)
+
+instance Binary FixSymbol where
   get = textSymbol <$> get
   put = put . symbolText
 
-sCache :: Cache Symbol
+
+instance (Binary s, Binary fs) => Binary (Symbol' fs s)
+
+sCache :: Cache FixSymbol
 sCache = mkCache
 {-# NOINLINE sCache #-}
 
-instance IsString Symbol where
+instance IsString FixSymbol where
   fromString = textSymbol . T.pack
 
-instance Show Symbol where
+instance IsString (Symbol s) where
+  fromString = FS . textSymbol . T.pack
+
+instance Show FixSymbol where
   show = show . symbolRaw
 
-mappendSym :: Symbol -> Symbol -> Symbol
+mappendSym :: FixSymbol -> FixSymbol -> FixSymbol
 mappendSym s1 s2 = textSymbol $ mappend s1' s2'
     where
       s1'        = symbolText s1
       s2'        = symbolText s2
 
-instance PPrint Symbol where
+instance PPrint FixSymbol where
   pprintTidy _ = text . symbolString
+
+instance (PPrint s, PPrint fs) => PPrint (Symbol' fs s) where
+  pprintTidy t (FS fs) = pprintTidy t fs
+  pprintTidy t (AS as) = pprintTidy t as
 
 instance Fixpoint T.Text where
   toFix = text . T.unpack
@@ -226,10 +279,15 @@ instance Fixpoint T.Text where
         but `symbolText`     if you want it to be human-readable.
  -}
 
-instance Fixpoint Symbol where
+instance Fixpoint FixSymbol where
   toFix = toFix . checkedText -- symbolSafeText
 
-checkedText :: Symbol -> T.Text
+instance (Fixpoint fs, Fixpoint s) => Fixpoint (Symbol' fs s) where
+  toFix (FS s) = toFix s
+  toFix (AS as) = toFix as
+  
+
+checkedText :: FixSymbol -> T.Text
 checkedText x
   | Just (c, t') <- T.uncons t
   , okHd c && T.all okChr t'   = t
@@ -243,29 +301,38 @@ checkedText x
 -- | Located Symbols -----------------------------------------------------
 ---------------------------------------------------------------------------
 
-type LocSymbol = Located Symbol
+type LocSymbol = Symbol' (Located FixSymbol)
+
+type LocFixSymbol = Located FixSymbol
+
 type LocText   = Located T.Text
 
-isDummy :: (Symbolic a) => a -> Bool
+-- YL: Maybe we need a comonad dependency
+-- should be defined as extract
+dropLoc :: LocSymbol s -> Symbol s
+dropLoc (FS s) = FS $ val s
+dropLoc (AS s) = AS s
+
+isDummy :: (FixSymbolic a) => a -> Bool
 isDummy a = isPrefixOfSym (symbol dummyName) (symbol a)
 
-instance Symbolic a => Symbolic (Located a) where
+instance FixSymbolic a => FixSymbolic (Located a) where
   symbol = symbol . val
 
 ---------------------------------------------------------------------------
 -- | Decoding Symbols -----------------------------------------------------
 ---------------------------------------------------------------------------
 
-symbolText :: Symbol -> T.Text
+symbolText :: FixSymbol -> T.Text
 symbolText = symbolRaw
 
-symbolString :: Symbol -> String
+symbolString :: FixSymbol -> String
 symbolString = T.unpack . symbolText
 
-symbolSafeText :: Symbol -> SafeText
+symbolSafeText :: FixSymbol -> SafeText
 symbolSafeText = symbolEncoded
 
-symbolSafeString :: Symbol -> String
+symbolSafeString :: FixSymbol -> String
 symbolSafeString = T.unpack . symbolSafeText
 
 ---------------------------------------------------------------------------
@@ -274,7 +341,7 @@ symbolSafeString = T.unpack . symbolSafeText
 
 -- INVARIANT: All strings *must* be built from here
 
-textSymbol :: T.Text -> Symbol
+textSymbol :: T.Text -> FixSymbol
 textSymbol = intern
 
 encode :: T.Text -> SafeText
@@ -362,155 +429,160 @@ symChars =  safeChars `mappend`
 okSymChars :: S.HashSet Char
 okSymChars = safeChars
 
-isPrefixOfSym :: Symbol -> Symbol -> Bool
+isPrefixOfSym :: FixSymbol -> FixSymbol -> Bool
 isPrefixOfSym (symbolText -> p) (symbolText -> x) = p `T.isPrefixOf` x
 
-isSuffixOfSym :: Symbol -> Symbol -> Bool
+isSuffixOfSym :: FixSymbol -> FixSymbol -> Bool
 isSuffixOfSym (symbolText -> p) (symbolText -> x) = p `T.isSuffixOf` x
 
 
-headSym :: Symbol -> Char
+headSym :: FixSymbol -> Char
 headSym (symbolText -> t) = T.head t
 
-consSym :: Char -> Symbol -> Symbol
+consSym :: Char -> FixSymbol -> FixSymbol
 consSym c (symbolText -> s) = symbol $ T.cons c s
 
-unconsSym :: Symbol -> Maybe (Char, Symbol)
+unconsSym :: FixSymbol -> Maybe (Char, FixSymbol)
 unconsSym (symbolText -> s) = second symbol <$> T.uncons s
 
--- singletonSym :: Char -> Symbol -- Yuck
+-- singletonSym :: Char -> FixSymbol -- Yuck
 -- singletonSym = (`consSym` "")
 
-lengthSym :: Symbol -> Int
+lengthSym :: FixSymbol -> Int
 lengthSym (symbolText -> t) = T.length t
 
-dropSym :: Int -> Symbol -> Symbol
+dropSym :: Int -> FixSymbol -> FixSymbol
 dropSym n (symbolText -> t) = symbol $ T.drop n t
 
-stripPrefix :: Symbol -> Symbol -> Maybe Symbol
+stripPrefix :: FixSymbol -> FixSymbol -> Maybe FixSymbol
 stripPrefix p x = symbol <$> T.stripPrefix (symbolText p) (symbolText x)
 
-stripSuffix :: Symbol -> Symbol -> Maybe Symbol
+stripSuffix :: FixSymbol -> FixSymbol -> Maybe FixSymbol
 stripSuffix p x = symbol <$> T.stripSuffix (symbolText p) (symbolText x)
 
 
 --------------------------------------------------------------------------------
--- | Use this **EXCLUSIVELY** when you want to add stuff in front of a Symbol
+-- | Use this **EXCLUSIVELY** when you want to add stuff in front of a FixSymbol
 --------------------------------------------------------------------------------
-suffixSymbol :: Symbol -> Symbol -> Symbol
+suffixSymbol :: FixSymbol -> FixSymbol -> FixSymbol
 suffixSymbol  x y = x `mappendSym` symSepName `mappendSym` y
 
-vv                  :: Maybe Integer -> Symbol
+vv                  :: Maybe Integer -> FixSymbol
 -- vv (Just i)         = symbol $ symbolSafeText vvName `T.snoc` symSepName `mappend` T.pack (show i)
 vv (Just i)         = intSymbol vvName i
 vv Nothing          = vvName
 
-isNontrivialVV      :: Symbol -> Bool
+isNontrivialVV      :: FixSymbol -> Bool
 isNontrivialVV      = not . (vv Nothing ==)
 
-vvCon, dummySymbol :: Symbol
+vvCon, dummySymbol :: FixSymbol
 vvCon       = vvName `suffixSymbol` "F"
 dummySymbol = dummyName
 
--- ctorSymbol :: Symbol -> Symbol
+-- ctorSymbol :: FixSymbol -> FixSymbol
 -- ctorSymbol s = ctorPrefix `mappendSym` s
 
--- isCtorSymbol :: Symbol -> Bool
+-- isCtorSymbol :: FixSymbol -> Bool
 -- isCtorSymbol = isPrefixOfSym ctorPrefix
 
 -- | 'testSymbol c' creates the `is-c` symbol for the adt-constructor named 'c'.
-testSymbol :: Symbol -> Symbol
+testSymbol :: FixSymbol -> FixSymbol
 testSymbol s = testPrefix `mappendSym` s
 
-isTestSymbol :: Symbol -> Bool
+isTestSymbol :: FixSymbol -> Bool
 isTestSymbol = isPrefixOfSym testPrefix
 
-litSymbol :: Symbol -> Symbol
+litSymbol :: FixSymbol -> FixSymbol
 litSymbol s = litPrefix `mappendSym` s
 
-isLitSymbol :: Symbol -> Bool
+isLitSymbol :: FixSymbol -> Bool
 isLitSymbol = isPrefixOfSym litPrefix
 
-unLitSymbol :: Symbol -> Maybe Symbol
+unLitSymbol :: FixSymbol -> Maybe FixSymbol
 unLitSymbol = stripPrefix litPrefix
 
-intSymbol :: (Show a) => Symbol -> a -> Symbol
+intSymbol :: (Show a) => FixSymbol -> a -> FixSymbol
 intSymbol x i = x `suffixSymbol` symbol (show i)
 
-tempSymbol :: Symbol -> Integer -> Symbol
+tempSymbol :: FixSymbol -> Integer -> FixSymbol
 tempSymbol prefix = intSymbol (tempPrefix `mappendSym` prefix)
 
-renameSymbol :: Symbol -> Int -> Symbol
+renameSymbol :: FixSymbol -> Int -> FixSymbol
 renameSymbol prefix = intSymbol (renamePrefix `mappendSym` prefix)
 
-kArgSymbol :: Symbol -> Symbol -> Symbol
+kArgSymbol :: FixSymbol -> FixSymbol -> FixSymbol
 kArgSymbol x k = (kArgPrefix `mappendSym` x) `suffixSymbol` k
 
-existSymbol :: Symbol -> Integer -> Symbol
+existSymbol :: FixSymbol -> Integer -> FixSymbol
 existSymbol prefix = intSymbol (existPrefix `mappendSym` prefix)
 
-gradIntSymbol :: Integer -> Symbol
+gradIntSymbol :: Integer -> FixSymbol
 gradIntSymbol = intSymbol gradPrefix
 
-tempPrefix, anfPrefix, renamePrefix, litPrefix, gradPrefix :: Symbol
+tempPrefix, anfPrefix, renamePrefix, litPrefix, gradPrefix :: FixSymbol
 tempPrefix   = "lq_tmp$"
 anfPrefix    = "lq_anf$"
 renamePrefix = "lq_rnm$"
 litPrefix    = "lit$"
 gradPrefix   = "grad$"
 
-testPrefix  :: Symbol
+testPrefix  :: FixSymbol
 testPrefix   = "is$"
 
--- ctorPrefix  :: Symbol
+-- ctorPrefix  :: FixSymbol
 -- ctorPrefix   = "mk$"
 
-kArgPrefix, existPrefix :: Symbol
+kArgPrefix, existPrefix :: FixSymbol
 kArgPrefix   = "lq_karg$"
 existPrefix  = "lq_ext$"
 
 -------------------------------------------------------------------------
-tidySymbol :: Symbol -> Symbol
+tidySymbol :: FixSymbol -> FixSymbol
 -------------------------------------------------------------------------
 tidySymbol = unSuffixSymbol . unSuffixSymbol . unPrefixSymbol kArgPrefix
 
-unPrefixSymbol :: Symbol -> Symbol -> Symbol
+unPrefixSymbol :: FixSymbol -> FixSymbol -> FixSymbol
 unPrefixSymbol p s = fromMaybe s (stripPrefix p s)
 
-unSuffixSymbol :: Symbol -> Symbol
+unSuffixSymbol :: FixSymbol -> FixSymbol
 unSuffixSymbol s@(symbolText -> t)
   = maybe s symbol $ T.stripSuffix symSepName $ fst $ T.breakOnEnd symSepName t
 
--- takeWhileSym :: (Char -> Bool) -> Symbol -> Symbol
+-- takeWhileSym :: (Char -> Bool) -> FixSymbol -> FixSymbol
 -- takeWhileSym p (symbolText -> t) = symbol $ T.takeWhile p t
 
 
-nonSymbol :: Symbol
+nonSymbol :: FixSymbol
 nonSymbol = ""
 
-isNonSymbol :: Symbol -> Bool
+isNonSymbol :: FixSymbol -> Bool
 isNonSymbol = (== nonSymbol)
 
 ------------------------------------------------------------------------------
 -- | Values that can be viewed as Symbols
 ------------------------------------------------------------------------------
 
-class Symbolic a where
-  symbol :: a -> Symbol
+class FixSymbolic a where
+  symbol :: a -> FixSymbol
 
-symbolicString :: (Symbolic a) => a -> String
+symbolicString :: (FixSymbolic a) => a -> String
 symbolicString = symbolString . symbol
 
-instance Symbolic T.Text where
+instance (FixSymbolic fs) => FixSymbolic (Symbol' fs s) where
+  symbol (FS s) = symbol s
+  symbol _ = panic "Coercing Symbol s into FixSymbol! Potential loss of GHC Information!"
+
+
+instance FixSymbolic T.Text where
   symbol = textSymbol
 
-instance Symbolic String where
+instance FixSymbolic String where
   symbol = symbol . T.pack
 
-instance Symbolic Symbol where
+instance FixSymbolic FixSymbol where
   symbol = id
 
-symbolBuilder :: (Symbolic a) => a -> Builder.Builder
+symbolBuilder :: (FixSymbolic a) => a -> Builder.Builder
 symbolBuilder = Builder.fromText . symbolSafeText . symbol
 
 {-# INLINE buildMany #-}
@@ -523,19 +595,19 @@ buildMany (b:bs) = b <> mconcat [ " " <> b | b <- bs ]
 --------------- Global Name Definitions ------------------------------------
 ----------------------------------------------------------------------------
 
-lambdaName :: Symbol
+lambdaName :: FixSymbol
 lambdaName = "smt_lambda"
 
-lamArgPrefix :: Symbol
+lamArgPrefix :: FixSymbol
 lamArgPrefix = "lam_arg"
 
-lamArgSymbol :: Int -> Symbol
+lamArgSymbol :: Int -> FixSymbol
 lamArgSymbol = intSymbol lamArgPrefix
 
-isLamArgSymbol :: Symbol -> Bool
+isLamArgSymbol :: FixSymbol -> Bool
 isLamArgSymbol = isPrefixOfSym lamArgPrefix
 
-setToIntName, bitVecToIntName, mapToIntName, realToIntName, toIntName :: Symbol
+setToIntName, bitVecToIntName, mapToIntName, realToIntName, toIntName :: FixSymbol
 setToIntName    = "set_to_int"
 bitVecToIntName = "bitvec_to_int"
 mapToIntName    = "map_to_int"
@@ -545,7 +617,7 @@ toIntName       = "cast_as_int"
 boolToIntName :: (IsString a) => a
 boolToIntName   = "bool_to_int"
 
-setApplyName, bitVecApplyName, mapApplyName, boolApplyName, realApplyName, intApplyName :: Int -> Symbol
+setApplyName, bitVecApplyName, mapApplyName, boolApplyName, realApplyName, intApplyName :: Int -> FixSymbol
 setApplyName    = intSymbol "set_apply_"
 bitVecApplyName = intSymbol "bitvec_apply"
 mapApplyName    = intSymbol "map_apply_"
@@ -553,20 +625,20 @@ boolApplyName   = intSymbol "bool_apply_"
 realApplyName   = intSymbol "real_apply_"
 intApplyName    = intSymbol "int_apply_"
 
-applyName :: Symbol
+applyName :: FixSymbol
 applyName = "apply"
 
-coerceName :: Symbol
+coerceName :: FixSymbol
 coerceName = "coerce"
 
-preludeName, dummyName, boolConName, funConName :: Symbol
+preludeName, dummyName, boolConName, funConName :: FixSymbol
 preludeName  = "Prelude"
 dummyName    = "LIQUID$dummy"
 boolConName  = "Bool"
 funConName   = "->"
 
 
-listConName, listLConName, tupConName, propConName, _hpropConName, vvName, setConName, mapConName :: Symbol
+listConName, listLConName, tupConName, propConName, _hpropConName, vvName, setConName, mapConName :: FixSymbol
 listConName  = "[]"
 listLConName = "List"
 tupConName   = "Tuple"
@@ -585,7 +657,7 @@ charConName  = "Char"
 symSepName   :: (IsString a) => a
 symSepName   = "##"
 
-nilName, consName, size32Name, size64Name, bitVecName, bvOrName, bvAndName :: Symbol
+nilName, consName, size32Name, size64Name, bitVecName, bvOrName, bvAndName :: FixSymbol
 nilName      = "nil"
 consName     = "cons"
 size32Name   = "Size32"
@@ -594,17 +666,17 @@ bitVecName   = "BitVec"
 bvOrName     = "bvor"
 bvAndName    = "bvand"
 
--- HKT tyAppName :: Symbol
+-- HKT tyAppName :: FixSymbol
 -- HKT tyAppName    = "LF-App"
 
-mulFuncName, divFuncName :: Symbol
+mulFuncName, divFuncName :: FixSymbol
 mulFuncName  = "Z3_OP_MUL"
 divFuncName  = "Z3_OP_DIV"
 
-isPrim :: Symbol -> Bool 
+isPrim :: FixSymbol -> Bool 
 isPrim x = S.member x prims 
 
-prims :: S.HashSet Symbol
+prims :: S.HashSet FixSymbol
 prims = S.fromList 
   [ propConName
   , _hpropConName
@@ -640,6 +712,26 @@ prims = S.fromList
   , consName
   ]
 
+-------------------------------------------------------------------------------
+-- | Classes that need to be implemented by the source language symbol
+-------------------------------------------------------------------------------
+
+
+class IsListConName s where
+  isListConName :: s -> Bool
+
+
+instance IsListConName LocFixSymbol where
+  isListConName x = c == listConName || c == listLConName --"List"
+    where
+      c           = val x
+
+instance IsListConName s => IsListConName (LocSymbol s) where
+  isListConName (FS s) = isListConName s
+  isListConName (AS s) = isListConName s
+
+
+
 {-
 -------------------------------------------------------------------------------
 -- | Memoized Decoding
@@ -662,6 +754,6 @@ memoDecode :: Int -> T.Text
 memoDecode i = unsafePerformIO $
                  safeLookup msg i <$> readIORef symbolMemo
                where
-                 msg = "Symbol Decode Error: " ++ show i
+                 msg = "FixSymbol Decode Error: " ++ show i
 
 -}

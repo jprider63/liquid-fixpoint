@@ -1,4 +1,6 @@
-{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveGeneric       #-}
+{-# LANGUAGE TypeApplications    #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Language.Fixpoint.Solver.TrivialSort (nontrivsorts) where
 
@@ -19,32 +21,32 @@ import           Text.Printf
 import           Debug.Trace
 
 -------------------------------------------------------------------------
-nontrivsorts :: (Fixpoint a) => Config -> FInfo a -> IO (Result a)
+nontrivsorts :: (Ord s, Fixpoint s, Hashable s, Show s, PPrint s, Fixpoint a) => Config -> FInfo s a -> IO (Result s a)
 -------------------------------------------------------------------------
 nontrivsorts cfg fi = do
   let fi' = simplify' cfg fi
   writeFInfo cfg fi' $ queryFile Out cfg
   return mempty
 
-simplify' :: Config -> FInfo a -> FInfo a
+simplify' :: (Show s, Fixpoint s, Hashable s, Ord s) => Config -> FInfo s a -> FInfo s a
 simplify' _ fi = simplifyFInfo (mkNonTrivSorts fi) fi
 
 --------------------------------------------------------------------
 -- | The main data types
 --------------------------------------------------------------------
-type NonTrivSorts = S.HashSet Sort
-type KVarMap      = M.HashMap KVar [Sort]
-data Polarity     = Lhs | Rhs
-type TrivInfo     = (NonTrivSorts, KVarMap)
+type NonTrivSorts s = S.HashSet (Sort s)
+type KVarMap s      = M.HashMap (KVar s) [Sort s]
+data Polarity       = Lhs | Rhs
+type TrivInfo s     = (NonTrivSorts s, KVarMap s)
 --------------------------------------------------------------------
 
 --------------------------------------------------------------------
-mkNonTrivSorts :: FInfo a -> NonTrivSorts
+mkNonTrivSorts :: (Hashable s, Ord s) => FInfo s a -> NonTrivSorts s
 --------------------------------------------------------------------
 mkNonTrivSorts = {- tracepp "mkNonTrivSorts: " . -}  nonTrivSorts . trivInfo
 
 --------------------------------------------------------------------
-nonTrivSorts :: TrivInfo -> NonTrivSorts
+nonTrivSorts :: (Ord s, Eq s, Hashable s) => TrivInfo s -> NonTrivSorts s
 --------------------------------------------------------------------
 nonTrivSorts ti = S.fromList [s | S s <- ntvs]
   where
@@ -53,79 +55,79 @@ nonTrivSorts ti = S.fromList [s | S s <- ntvs]
     root        = fromMaybe err    $ fv NTV
     err         = errorstar "nonTrivSorts: cannot find root!"
 
-ntGraph :: TrivInfo -> NTG
+ntGraph :: (Hashable s, Eq s) => TrivInfo s -> NTG s
 ntGraph ti = [(v,v,vs) | (v, vs) <- groupList $ ntEdges ti]
 
-ntEdges :: TrivInfo -> [(NTV, NTV)]
+ntEdges :: TrivInfo s -> [(NTV s, NTV s)]
 ntEdges (nts, kvm) = es ++ [(v, u) | (u, v) <- es]
   where
     es = [(NTV, S s) | s       <- S.toList nts         ]
       ++ [(K k, S s) | (k, ss) <- M.toList kvm, s <- ss]
 
-type NTG = [(NTV, NTV, [NTV])]
+type NTG s = [(NTV s, NTV s, [NTV s])]
 
-data NTV = NTV
-         | K !KVar
-         | S !Sort
-         deriving (Eq, Ord, Show, Generic)
+data NTV s = NTV
+           | K !(KVar s)
+           | S !(Sort s)
+           deriving (Eq, Ord, Show, Generic)
 
-instance Hashable NTV
+instance (Hashable s) => Hashable (NTV s)
 
 --------------------------------------------------------------------
-trivInfo :: FInfo a -> TrivInfo
+trivInfo :: (Hashable s, Eq s) => FInfo s a -> TrivInfo s
 --------------------------------------------------------------------
 trivInfo fi = updTISubCs (M.elems $ cm fi)
             . updTIBinds (bs fi)
             $ (S.empty, M.empty)
 
-updTISubCs :: [SubC a] -> TrivInfo -> TrivInfo
+updTISubCs :: (Eq s, Hashable s) => [SubC s a] -> TrivInfo s -> TrivInfo s
 updTISubCs cs ti = foldl' (flip updTISubC) ti cs
 
-updTISubC :: SubC a -> TrivInfo -> TrivInfo
+updTISubC :: (Hashable s, Eq s) => SubC s a -> TrivInfo s -> TrivInfo s
 updTISubC c = updTI Lhs (slhs c) . updTI Rhs (srhs c)
 
-updTIBinds :: BindEnv -> TrivInfo -> TrivInfo
+updTIBinds :: (Hashable s, Eq s) => BindEnv s -> TrivInfo s -> TrivInfo s
 updTIBinds be ti = foldl' (flip (updTI Lhs)) ti ts
   where
     ts           = [t | (_,_,t) <- bindEnvToList be]
 
 --------------------------------------------------------------------
-updTI :: Polarity -> SortedReft -> TrivInfo -> TrivInfo
+updTI :: (Eq s, Hashable s) => Polarity -> SortedReft s -> TrivInfo s -> TrivInfo s
 --------------------------------------------------------------------
 updTI p (RR t r) = addKVs t (kvars r) . addNTS p r t
 
-addNTS :: Polarity -> Reft -> Sort -> TrivInfo -> TrivInfo
+addNTS :: (Eq s, Hashable s) => Polarity -> Reft s -> Sort s -> TrivInfo s -> TrivInfo s
 addNTS p r t ti
   | isNTR p r = addSort t ti
   | otherwise = ti
 
-addKVs :: Sort -> [KVar] -> TrivInfo -> TrivInfo
+addKVs :: (Hashable s, Eq s) => Sort s -> [KVar s] -> TrivInfo s -> TrivInfo s
 addKVs t ks ti     = foldl' addK ti ks
   where
     addK (ts, m) k = (ts, inserts k t m)
 
-addSort :: Sort -> TrivInfo -> TrivInfo
+addSort :: (Hashable s, Eq s) => Sort s -> TrivInfo s -> TrivInfo s
 addSort t (ts, m) = (S.insert t ts, m)
 
 --------------------------------------------------------------------
-isNTR :: Polarity -> Reft -> Bool
+isNTR :: (Eq s) => Polarity -> Reft s -> Bool
 --------------------------------------------------------------------
 isNTR Rhs = not . trivR
 isNTR Lhs = not . trivOrSingR
 
-trivR :: Reft -> Bool
+trivR :: (Eq s) => Reft s -> Bool
 trivR = all trivP . conjuncts . reftPred
 
-trivOrSingR :: Reft -> Bool
+trivOrSingR :: (Eq s) => Reft s -> Bool
 trivOrSingR (Reft (v, p)) = all trivOrSingP $ conjuncts p
   where
     trivOrSingP p         = trivP p || singP v p
 
-trivP :: Expr -> Bool
+trivP :: (Eq s) => Expr s -> Bool
 trivP (PKVar {}) = True
 trivP p          = isTautoPred p
 
-singP :: Symbol -> Expr -> Bool
+singP :: (Eq s) => Symbol s -> Expr s -> Bool
 singP v (PAtom Eq (EVar x) _)
   | v == x                    = True
 singP v (PAtom Eq _ (EVar x))
@@ -133,7 +135,7 @@ singP v (PAtom Eq _ (EVar x))
 singP _ _                     = False
 
 -------------------------------------------------------------------------
-simplifyFInfo :: NonTrivSorts -> FInfo a -> FInfo a
+simplifyFInfo :: (Ord s, Hashable s, Fixpoint s, Show s, Eq s) => NonTrivSorts s -> FInfo s a -> FInfo s a
 -------------------------------------------------------------------------
 simplifyFInfo tm fi = fi {
      cm   = simplifySubCs   tm $ cm fi
@@ -141,14 +143,14 @@ simplifyFInfo tm fi = fi {
    , bs   = simplifyBindEnv tm $ bs fi
 }
 
-simplifyBindEnv :: NonTrivSorts -> BindEnv -> BindEnv
+simplifyBindEnv :: (Ord s, Hashable s, Fixpoint s, Show s) => NonTrivSorts s -> BindEnv s -> BindEnv s
 simplifyBindEnv tm = mapBindEnv (\_ (x, sr) -> (x, simplifySortedReft tm sr))
 
-simplifyWfCs :: NonTrivSorts -> M.HashMap KVar (WfC a) -> M.HashMap KVar (WfC a)
+simplifyWfCs :: (Eq s, Hashable s) => NonTrivSorts s -> M.HashMap (KVar s) (WfC s a) -> M.HashMap (KVar s) (WfC s a)
 simplifyWfCs tm = M.filter (isNonTrivialSort tm . snd3 . wrft)
 
-simplifySubCs :: (Eq k, Hashable k)
-              => NonTrivSorts -> M.HashMap k (SubC a) -> M.HashMap k (SubC a)
+simplifySubCs :: (Show s, Fixpoint s, Hashable s, Ord s, Eq k, Hashable k)
+              => NonTrivSorts s -> M.HashMap k (SubC s a) -> M.HashMap k (SubC s a)
 simplifySubCs ti cm = trace msg cm'
   where
     cm' = tx cm
@@ -157,20 +159,20 @@ simplifySubCs ti cm = trace msg cm'
     n   = M.size cm
     n'  = M.size cm'
 
-simplifySubC :: NonTrivSorts -> (b, SubC a) -> Maybe (b, SubC a)
+simplifySubC :: forall s a b. (Ord s, Hashable s, Fixpoint s, Show s) => NonTrivSorts s -> (b, SubC s a) -> Maybe (b, SubC s a)
 simplifySubC tm (i, c)
- | isNonTrivial srhs' = Just (i, c { slhs = slhs' , srhs = srhs' })
+ | isNonTrivial @s @_ srhs' = Just (i, c { slhs = slhs' , srhs = srhs' })
  | otherwise          = Nothing
   where
     slhs'             = simplifySortedReft tm (slhs c)
     srhs'             = simplifySortedReft tm (srhs c)
 
-simplifySortedReft :: NonTrivSorts -> SortedReft -> SortedReft
+simplifySortedReft :: (Show s, Fixpoint s, Hashable s, Ord s, Eq s) => NonTrivSorts s -> SortedReft s -> SortedReft s
 simplifySortedReft tm sr
   | nonTrivial = sr
   | otherwise  = sr { sr_reft = mempty }
   where
     nonTrivial = isNonTrivialSort tm (sr_sort sr)
 
-isNonTrivialSort :: NonTrivSorts -> Sort -> Bool
+isNonTrivialSort :: (Hashable s, Eq s) => NonTrivSorts s -> Sort s -> Bool
 isNonTrivialSort tm t = S.member t tm

@@ -1,8 +1,10 @@
-{-# LANGUAGE PatternGuards     #-}
-{-# LANGUAGE TupleSections     #-}
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications     #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
+{-# LANGUAGE PatternGuards        #-}
+{-# LANGUAGE TupleSections        #-}
+{-# LANGUAGE FlexibleContexts     #-}
+{-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE OverloadedStrings    #-}
 
 --------------------------------------------------------------------------------
 -- | Solve a system of horn-clause constraints ---------------------------------
@@ -19,6 +21,7 @@ import qualified Language.Fixpoint.Types.Solutions as Sol
 import           Language.Fixpoint.Types.PrettyPrint
 import           Language.Fixpoint.Types.Config hiding (stats)
 import qualified Language.Fixpoint.Solver.Solution  as S
+import           Language.Fixpoint.Smt.Types (SMTLIB2)
 import qualified Language.Fixpoint.Solver.Worklist  as W
 import qualified Language.Fixpoint.Solver.Eliminate as E
 import           Language.Fixpoint.Solver.Monad
@@ -30,11 +33,12 @@ import           System.Console.CmdArgs.Verbosity -- (whenNormal, whenLoud)
 import           Control.DeepSeq
 import qualified Data.HashMap.Strict as M
 import qualified Data.HashSet        as S
+import           Data.Hashable
 -- import qualified Data.Maybe          as Mb 
 import qualified Data.List           as L
 
 --------------------------------------------------------------------------------
-solve :: (NFData a, F.Fixpoint a, Show a, F.Loc a) => Config -> F.SInfo a -> IO (F.Result (Integer, a))
+solve :: (NFData s, Show s, Fixpoint s, Ord s, SMTLIB2 s s, Hashable s, PPrint s, Eq s, NFData a, F.Fixpoint a, Show a, F.Loc a) => Config -> F.SInfo s a -> IO (F.Result s (Integer, a))
 --------------------------------------------------------------------------------
 
 solve cfg fi = do
@@ -55,17 +59,17 @@ solve cfg fi = do
 --------------------------------------------------------------------------------
 -- | Progress Bar
 --------------------------------------------------------------------------------
-withProgressFI :: SolverInfo a b -> IO b -> IO b
+withProgressFI :: SolverInfo s a b -> IO b -> IO b
 withProgressFI = withProgress . (+ 1) . fromIntegral . cNumScc . siDeps  
 --------------------------------------------------------------------------------
 
-printStats :: F.SInfo a ->  W.Worklist a -> Stats -> IO ()
+printStats :: F.SInfo s a ->  W.Worklist s a -> Stats -> IO ()
 printStats fi w s = putStrLn "\n" >> ppTs [ ptable fi, ptable s, ptable w ]
   where
     ppTs          = putStrLn . showpp . mconcat
 
 --------------------------------------------------------------------------------
-solverInfo :: Config -> F.SInfo a -> SolverInfo a b
+solverInfo :: (PPrint s, Hashable s, Ord s, Fixpoint s, Show s) => Config -> F.SInfo s a -> SolverInfo s a b
 --------------------------------------------------------------------------------
 solverInfo cfg fI
   | useElim cfg = E.solverInfo cfg fI
@@ -73,17 +77,17 @@ solverInfo cfg fI
   where
     cD          = elimDeps fI (kvEdges fI) mempty mempty
 
-siKvars :: F.SInfo a -> S.HashSet F.KVar
+siKvars :: (Hashable s, Eq s) => F.SInfo s a -> S.HashSet (F.KVar s)
 siKvars = S.fromList . M.keys . F.ws
 
 --------------------------------------------------------------------------------
-solve_ :: (NFData a, F.Fixpoint a, F.Loc a)
+solve_ :: (PPrint s, SMTLIB2 s s, Hashable s, Ord s, Fixpoint s, Show s, NFData s, NFData a, F.Fixpoint a, F.Loc a)
        => Config
-       -> F.SInfo a
-       -> Sol.Solution
-       -> S.HashSet F.KVar
-       -> W.Worklist a
-       -> SolveM (F.Result (Integer, a), Stats)
+       -> F.SInfo s a
+       -> Sol.Solution s
+       -> S.HashSet (F.KVar s)
+       -> W.Worklist s a
+       -> SolveM s (F.Result s (Integer, a), Stats)
 --------------------------------------------------------------------------------
 solve_ cfg fi s0 ks wkl = do
   let s1   = {-# SCC "sol-init" #-} S.init cfg fi ks
@@ -99,17 +103,17 @@ solve_ cfg fi s0 ks wkl = do
 -- | tidyResult ensures we replace the temporary kVarArg names introduced to
 --   ensure uniqueness with the original names in the given WF constraints.
 --------------------------------------------------------------------------------
-tidyResult :: F.Result a -> F.Result a
+tidyResult :: (Show s, Fixpoint s, Ord s, Hashable s) => F.Result s a -> F.Result s a
 tidyResult r = r { F.resSolution = tidySolution (F.resSolution r) }
 
-tidySolution :: F.FixSolution -> F.FixSolution
+tidySolution :: (Hashable s, Ord s, Fixpoint s, Show s) => F.FixSolution s -> F.FixSolution s
 tidySolution = fmap tidyPred
 
-tidyPred :: F.Expr -> F.Expr
-tidyPred = F.substf (F.eVar . F.tidySymbol)
+tidyPred :: forall s. (Show s, Fixpoint s, Ord s, Hashable s) => F.Expr s -> F.Expr s
+tidyPred = F.substf @s (F.eVar . F.tidySymbol . F.symbol)
 
 --------------------------------------------------------------------------------
-refine :: (F.Loc a) => Sol.Solution -> W.Worklist a -> SolveM Sol.Solution
+refine :: (SMTLIB2 s s, Fixpoint s, Ord s, PPrint s, Hashable s, Show s, F.Loc a) => Sol.Solution s -> W.Worklist s a -> SolveM s (Sol.Solution s)
 --------------------------------------------------------------------------------
 refine s w
   | Just (c, w', newScc, rnk) <- W.pop w = do
@@ -127,8 +131,8 @@ refine s w
 ---------------------------------------------------------------------------
 -- | Single Step Refinement -----------------------------------------------
 ---------------------------------------------------------------------------
-refineC :: (F.Loc a) => Int -> Sol.Solution -> F.SimpC a
-        -> SolveM (Bool, Sol.Solution)
+refineC :: (SMTLIB2 s s, Fixpoint s, Ord s, PPrint s, Hashable s, Show s, F.Loc a) => Int -> Sol.Solution s -> F.SimpC s a
+        -> SolveM s (Bool, Sol.Solution s)
 ---------------------------------------------------------------------------
 refineC _i s c
   | null rhs  = return (False, s)
@@ -144,7 +148,7 @@ refineC _i s c
     _msg ks xs ys = printf "refineC: iter = %d, sid = %s, s = %s, rhs = %d, rhs' = %d \n"
                      _i (show _ci) (showpp ks) (length xs) (length ys)
 
-rhsCands :: Sol.Solution -> F.SimpC a -> ([F.KVar], Sol.Cand (F.KVar, Sol.EQual))
+rhsCands :: (Show s, Hashable s, PPrint s, Ord s, Fixpoint s) => Sol.Solution s -> F.SimpC s a -> ([F.KVar s], Sol.Cand s (F.KVar s, Sol.EQual s))
 rhsCands s c    = (fst <$> ks, kqs)
   where
     kqs         = [ (p, (k, q)) | (k, su) <- ks, (p, q)  <- cnd k su ]
@@ -152,7 +156,7 @@ rhsCands s c    = (fst <$> ks, kqs)
     cnd k su    = Sol.qbPreds msg s su (Sol.lookupQBind s k)
     msg         = "rhsCands: " ++ show (F.sid c)
 
-predKs :: F.Expr -> [(F.KVar, F.Subst)]
+predKs :: F.Expr s -> [(F.KVar s, F.Subst s)]
 predKs (F.PAnd ps)    = concatMap predKs ps
 predKs (F.PKVar k su) = [(k, su)]
 predKs _              = []
@@ -160,8 +164,8 @@ predKs _              = []
 --------------------------------------------------------------------------------
 -- | Convert Solution into Result ----------------------------------------------
 --------------------------------------------------------------------------------
-result :: (F.Fixpoint a, F.Loc a, NFData a) => Config -> W.Worklist a -> Sol.Solution
-       -> SolveM (F.Result (Integer, a))
+result :: (Show s, Hashable s, SMTLIB2 s s, Ord s, Fixpoint s, PPrint s, Eq s, F.Fixpoint a, F.Loc a, NFData a) => Config -> W.Worklist s a -> Sol.Solution s
+       -> SolveM s (F.Result s (Integer, a))
 --------------------------------------------------------------------------------
 result cfg wkl s = do
   lift $ writeLoud "Computing Result"
@@ -171,17 +175,17 @@ result cfg wkl s = do
   where
     ci c = (F.subcId c, F.sinfo c)
 
-solResult :: Config -> Sol.Solution -> SolveM (M.HashMap F.KVar F.Expr)
+solResult :: (Fixpoint s, Ord s, PPrint s, SMTLIB2 s s, Hashable s, Show s) => Config -> Sol.Solution s -> SolveM s (M.HashMap (F.KVar s) (F.Expr s))
 solResult cfg = minimizeResult cfg . Sol.result
 
-result_ :: (F.Loc a, NFData a) => Config -> W.Worklist a -> Sol.Solution -> SolveM (F.FixResult (F.SimpC a))
+result_ :: (PPrint s, Fixpoint s, Ord s, SMTLIB2 s s, Hashable s, Show s, F.Loc a, NFData a) => Config -> W.Worklist s a -> Sol.Solution s -> SolveM s (F.FixResult (F.SimpC s a))
 result_  cfg w s = res <$> filterM (isUnsat s) cs
   where
     cs           = isChecked cfg (W.unsatCandidates w)
     res []       = F.Safe
     res cs'      = F.Unsafe cs'
 
-isChecked :: Config -> [F.SimpC a] -> [F.SimpC a]
+isChecked :: Config -> [F.SimpC s a] -> [F.SimpC s a]
 isChecked cfg cs = case checkCstr cfg of 
   []   -> cs 
   ids  -> let s = S.fromList ids in 
@@ -191,20 +195,20 @@ isChecked cfg cs = case checkCstr cfg of
 -- | `minimizeResult` transforms each KVar's result by removing
 --   conjuncts that are implied by others. That is,
 --
---      minimizeConjuncts :: ps:[Pred] -> {qs:[Pred] | subset qs ps}
+--      minimizeConjuncts :: ps:[Pred s] -> {qs:[Pred s] | subset qs ps}
 --
 --   such that `minimizeConjuncts ps` is a minimal subset of ps where no
 --   is implied by /\_{q' in qs \ qs}
 --   see: tests/pos/min00.fq for an example.
 --------------------------------------------------------------------------------
-minimizeResult :: Config -> M.HashMap F.KVar F.Expr
-               -> SolveM (M.HashMap F.KVar F.Expr)
+minimizeResult :: (Show s, Hashable s, SMTLIB2 s s, PPrint s, Ord s, Fixpoint s) => Config -> M.HashMap (F.KVar s) (F.Expr s)
+               -> SolveM s (M.HashMap (F.KVar s) (F.Expr s))
 --------------------------------------------------------------------------------
 minimizeResult cfg s
   | minimalSol cfg = mapM minimizeConjuncts s
   | otherwise      = return s
 
-minimizeConjuncts :: F.Expr -> SolveM F.Expr
+minimizeConjuncts :: (Fixpoint s, Ord s, PPrint s, SMTLIB2 s s, Hashable s, Show s) => F.Expr s -> SolveM s (F.Expr s)
 minimizeConjuncts p = F.pAnd <$> go (F.conjuncts p) []
   where
     go []     acc   = return acc
@@ -213,7 +217,7 @@ minimizeConjuncts p = F.pAnd <$> go (F.conjuncts p) []
                               else go ps (p:acc)
 
 --------------------------------------------------------------------------------
-isUnsat :: (F.Loc a, NFData a) => Sol.Solution -> F.SimpC a -> SolveM Bool
+isUnsat :: (Show s, Hashable s, SMTLIB2 s s, Ord s, Fixpoint s, PPrint s, F.Loc a, NFData a) => Sol.Solution s -> F.SimpC s a -> SolveM s Bool
 --------------------------------------------------------------------------------
 isUnsat s c = do
   -- lift   $ printf "isUnsat %s" (show (F.subcId c))
@@ -225,7 +229,7 @@ isUnsat s c = do
   lift   $ whenLoud $ showUnsat res (F.subcId c) lp rp
   return res
 
-showUnsat :: Bool -> Integer -> F.Pred -> F.Pred -> IO ()
+showUnsat :: (Ord s, PPrint s, Fixpoint s) => Bool -> Integer -> F.Pred s -> F.Pred s -> IO ()
 showUnsat u i lP rP = {- when u $ -} do
   putStrLn $ printf   "UNSAT id %s %s" (show i) (show u)
   putStrLn $ showpp $ "LHS:" <+> pprint lP
@@ -234,23 +238,23 @@ showUnsat u i lP rP = {- when u $ -} do
 --------------------------------------------------------------------------------
 -- | Predicate corresponding to RHS of constraint in current solution
 --------------------------------------------------------------------------------
-rhsPred :: F.SimpC a -> F.Expr
+rhsPred :: (Eq s) => F.SimpC s a -> F.Expr s
 --------------------------------------------------------------------------------
 rhsPred c
   | isTarget c = F.crhs c
   | otherwise  = errorstar $ "rhsPred on non-target: " ++ show (F.sid c)
 
 --------------------------------------------------------------------------------
-isValid :: F.SrcSpan -> F.Expr -> F.Expr -> SolveM Bool
+isValid :: (Show s, Hashable s, SMTLIB2 s s, Ord s, Fixpoint s, PPrint s) => F.SrcSpan -> F.Expr s -> F.Expr s -> SolveM s Bool
 --------------------------------------------------------------------------------
 isValid sp p q = (not . null) <$> filterValid sp p [(q, ())]
 
-cstrSpan :: (F.Loc a) => F.SimpC a -> F.SrcSpan
+cstrSpan :: (F.Loc a) => F.SimpC s a -> F.SrcSpan
 cstrSpan = F.srcSpan . F.sinfo
 
 {-
 ---------------------------------------------------------------------------
-donePhase' :: String -> SolveM ()
+donePhase' :: String -> SolveM s ()
 ---------------------------------------------------------------------------
 donePhase' msg = lift $ do
   threadDelay 25000
@@ -264,7 +268,7 @@ donePhase' msg = lift $ do
 -- | Interaction with the user when Solving -----------------------------------
 -------------------------------------------------------------------------------
 
-_iMergePartitions :: [(Int, F.SInfo a)] -> IO [(Int, F.SInfo a)]
+_iMergePartitions :: (Eq s, Hashable s) => [(Int, F.SInfo s a)] -> IO [(Int, F.SInfo s a)]
 _iMergePartitions ifis = do
   putStrLn "Current Partitions are: "
   putStrLn $ unlines (partitionInfo <$> ifis)
@@ -287,14 +291,14 @@ getMergePartition n = do
             getMergePartition n
     else return (i,j)
 
-mergePartitions :: Int -> Int -> [(Int, F.SInfo a)] -> [(Int, F.SInfo a)]
+mergePartitions :: (Hashable s, Eq s) => Int -> Int -> [(Int, F.SInfo s a)] -> [(Int, F.SInfo s a)]
 mergePartitions i j fis
   = zip [1..] ((takei i `mappend` (takei j){F.bs = mempty}):rest)
   where
     takei i = snd (fis L.!! (i - 1))
     rest = snd <$> filter (\(k,_) -> (k /= i && k /= j)) fis
 
-partitionInfo :: (Int, F.SInfo a) -> String
+partitionInfo :: (Int, F.SInfo s a) -> String
 partitionInfo (i, fi)
   = "Partition number " ++ show i ++ "\n" ++
     "Defined ?? " ++ show defs    ++ "\n" ++

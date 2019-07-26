@@ -33,7 +33,7 @@ import           Control.DeepSeq
 import qualified Language.Fixpoint.Types           as F
 import           Language.Fixpoint.Types.Config hiding (stats)
 
-solveGradual :: (NFData a, F.Fixpoint a) => Config -> F.SInfo a -> IO (F.Result (Integer, a))
+solveGradual :: (NFData a, F.Fixpoint a) => Config -> F.SInfo s a -> IO (F.Result (Integer, a))
 solveGradual = undefined
 
 
@@ -43,17 +43,17 @@ solveGradual = undefined
 --------------------------------------------------------------------------------
 -- | Progress Bar
 --------------------------------------------------------------------------------
-withProgressFI :: SolverInfo a b -> IO b -> IO b
+withProgressFI :: SolverInfo s a b -> IO b -> IO b
 withProgressFI = withProgress . fromIntegral . cNumScc . siDeps
 --------------------------------------------------------------------------------
 
-printStats :: F.SInfo a ->  W.Worklist a -> Stats -> IO ()
+printStats :: F.SInfo s a ->  W.Worklist a -> Stats -> IO ()
 printStats fi w s = putStrLn "\n" >> ppTs [ ptable fi, ptable s, ptable w ]
   where
     ppTs          = putStrLn . showpp . mconcat
 
 --------------------------------------------------------------------------------
-solverInfo :: Config -> F.SInfo a -> SolverInfo a b
+solverInfo :: Config -> F.SInfo s a -> SolverInfo s a b
 --------------------------------------------------------------------------------
 solverInfo cfg fI
   | useElim cfg = E.solverInfo cfg fI
@@ -61,7 +61,7 @@ solverInfo cfg fI
   where
     cD          = elimDeps fI (kvEdges fI) mempty
 
-siKvars :: F.SInfo a -> S.HashSet F.KVar
+siKvars :: F.SInfo s a -> S.HashSet F.KVar
 siKvars = S.fromList . M.keys . F.ws
 
 
@@ -80,11 +80,11 @@ tidySolution = fmap tidyPred
 gtidySolution :: F.GFixSolution -> F.GFixSolution
 gtidySolution = fmap tidyPred --  (\(e, es) -> (tidyPred e, tidyPred <$> es))
 
-tidyPred :: F.Expr -> F.Expr
+tidyPred :: F.Expr s -> F.Expr s
 tidyPred = F.substf (F.eVar . F.tidySymbol)
 
 
-predKs :: F.Expr -> [(F.KVar, F.Subst)]
+predKs :: F.Expr s -> [(F.KVar s, F.Subst)]
 predKs (F.PAnd ps)    = concatMap predKs ps
 predKs (F.PKVar k su) = [(k, su)]
 predKs _              = []
@@ -92,14 +92,14 @@ predKs _              = []
 
 
 --------------------------------------------------------------------------------
-minimizeResult :: Config -> M.HashMap F.KVar F.Expr
-               -> SolveM (M.HashMap F.KVar F.Expr)
+minimizeResult :: Config -> M.HashMap (F.KVar s) F.Expr s
+               -> SolveM (M.HashMap (F.KVar s) F.Expr)
 --------------------------------------------------------------------------------
 minimizeResult cfg s
   | minimalSol cfg = mapM minimizeConjuncts s
   | otherwise      = return s
 
-minimizeConjuncts :: F.Expr -> SolveM F.Expr
+minimizeConjuncts :: F.Expr s -> SolveM (F.Expr s)
 minimizeConjuncts p = F.pAnd <$> go (F.conjuncts p) []
   where
     go []     acc   = return acc
@@ -109,7 +109,7 @@ minimizeConjuncts p = F.pAnd <$> go (F.conjuncts p) []
 
 
 
-showUnsat :: Bool -> Integer -> F.Pred -> F.Pred -> IO ()
+showUnsat :: Bool -> Integer -> F.Pred s -> F.Pred s -> IO ()
 showUnsat u i lP rP = {- when u $ -} do
   putStrLn $ printf   "UNSAT id %s %s" (show i) (show u)
   putStrLn $ showpp $ "LHS:" <+> pprint lP
@@ -118,13 +118,13 @@ showUnsat u i lP rP = {- when u $ -} do
 --------------------------------------------------------------------------------
 -- | Predicate corresponding to RHS of constraint in current solution
 --------------------------------------------------------------------------------
-rhsPred :: F.SimpC a -> F.Expr
+rhsPred :: F.SimpC s a -> F.Expr s
 --------------------------------------------------------------------------------
 rhsPred c
   | isTarget c = F.crhs c
   | otherwise  = errorstar $ "rhsPred on non-target: " ++ show (F.sid c)
 
-isValid :: F.Expr -> F.Expr -> SolveM Bool
+isValid :: F.Expr s -> F.Expr s -> SolveM Bool
 isValid p q = (not . null) <$> filterValid p [(q, ())]
 
 
@@ -132,7 +132,7 @@ isValid p q = (not . null) <$> filterValid p [(q, ())]
 -- | solve with edits to allow Gradual types ----------------------------------
 -------------------------------------------------------------------------------
 
-solveGradual :: (NFData a, F.Fixpoint a) => Config -> F.SInfo a -> IO (F.Result (Integer, a))
+solveGradual :: (NFData a, F.Fixpoint a) => Config -> F.SInfo s a -> IO (F.Result (Integer, a))
 -- solveGradual = undefined
 
 solveGradual cfg fi = do
@@ -150,10 +150,10 @@ solveGradual cfg fi = do
 --------------------------------------------------------------------------------
 solveGradual_ :: (NFData a, F.Fixpoint a)
        => Config
-       -> F.SInfo a
-       -> Sol.GSolution
-       -> S.HashSet F.KVar
-       -> W.Worklist a
+       -> F.SInfo s a
+       -> Sol.GSolution s
+       -> S.HashSet (F.KVar s)
+       -> W.Worklist s a
        -> SolveM (F.Result (Integer, a), Stats)
 --------------------------------------------------------------------------------
 solveGradual_ cfg fi s0 ks wkl = do
@@ -165,14 +165,14 @@ solveGradual_ cfg fi s0 ks wkl = do
   let res' = {-# SCC "sol-tidy"   #-} tidyResult res
   return $!! (res', st)
 
-filterLocal :: Sol.GSolution -> SolveM Sol.GSolution
+filterLocal :: Sol.GSolution s -> SolveM Sol.GSolution
 filterLocal sol = do
   gs' <- mapM (initGBind sol) gs
   return $ Sol.updateGMap sol $ M.fromList gs'
   where
     gs = M.toList $ Sol.gMap sol
 
-initGBind :: Sol.GSolution -> (F.KVar, (((F.Symbol, F.Sort), F.Expr), Sol.GBind)) -> SolveM (F.KVar, (((F.Symbol, F.Sort), F.Expr), Sol.GBind))
+initGBind :: Sol.GSolution s -> (F.KVar s, (((F.Symbol s, F.Sort s), F.Expr), Sol.GBind s)) -> SolveM (F.KVar s, (((F.Symbol s, F.Sort s), F.Expr s), Sol.GBind s))
 initGBind sol (k, (e, gb)) = do
    elems0  <- filterM (isLocal e) (Sol.gbEquals gb)
    elems   <- sortEquals elems0
@@ -221,7 +221,7 @@ initGBind sol (k, (e, gb)) = do
 
 
 --------------------------------------------------------------------------------
-refine :: Sol.GSolution -> W.Worklist a -> SolveM Sol.GSolution
+refine :: Sol.GSolution s -> W.Worklist s a -> SolveM Sol.GSolution
 --------------------------------------------------------------------------------
 refine s w
   | Just (c, w', newScc, rnk) <- W.pop w = do
@@ -239,7 +239,7 @@ refine s w
 ---------------------------------------------------------------------------
 -- | Single Step Refinement -----------------------------------------------
 ---------------------------------------------------------------------------
-refineC :: Int -> Sol.GSolution -> F.SimpC a -> SolveM (Bool, Sol.GSolution)
+refineC :: Int -> Sol.GSolution s -> F.SimpC s a -> SolveM (Bool, Sol.GSolution s)
 ---------------------------------------------------------------------------
 refineC _i s c
   | null rhs  = return (False, s)
@@ -256,7 +256,7 @@ refineC _i s c
                      _i (show _ci) (showpp ks) (length xs) (length ys)
 
 
-rhsCands :: Sol.GSolution -> F.SimpC a -> ([F.KVar], Sol.Cand (F.KVar, Sol.EQual))
+rhsCands :: Sol.GSolution s -> F.SimpC s a -> ([F.KVar s], Sol.Cand (F.KVar s, Sol.EQual))
 rhsCands s c    = (fst <$> ks, kqs)
   where
     kqs         = [ (p, (k, q)) | (k, su) <- ks, (p, q)  <- cnd k su ]
@@ -267,7 +267,7 @@ rhsCands s c    = (fst <$> ks, kqs)
 --------------------------------------------------------------------------------
 -- | Gradual Convert Solution into Result ----------------------------------------------
 --------------------------------------------------------------------------------
-result :: (F.Fixpoint a) => Config -> W.Worklist a -> Sol.GSolution
+result :: (F.Fixpoint a) => Config -> W.Worklist s a -> Sol.GSolution s
        -> SolveM (F.Result (Integer, a))
 --------------------------------------------------------------------------------
 result cfg wkl s = do
@@ -278,24 +278,24 @@ result cfg wkl s = do
   where
     ci c = (F.subcId c, F.sinfo c)
 
-result_ :: Fixpoint a =>  W.Worklist a -> Sol.GSolution -> SolveM (F.FixResult (F.SimpC a))
+result_ :: Fixpoint a =>  W.Worklist s a -> Sol.GSolution s -> SolveM (F.FixResult (F.SimpC s a))
 result_  w s = res <$> filterM (isUnsat s) cs
   where
     cs       = W.unsatCandidates w
     res []   = F.Safe
     res cs'  = F.Unsafe cs'
 
-solResult :: Config -> Sol.GSolution -> SolveM (M.HashMap F.KVar F.Expr)
+solResult :: Config -> Sol.GSolution s -> SolveM (M.HashMap (F.KVar s) F.Expr)
 solResult cfg
   = minimizeResult cfg . Sol.result
 
 
-solResultGradual :: W.Worklist a -> Config -> Sol.GSolution -> SolveM F.GFixSolution
+solResultGradual :: W.Worklist s a -> Config -> Sol.GSolution s -> SolveM F.GFixSolution
 solResultGradual w _cfg sol
   = F.toGFixSol . Sol.resultGradual <$> updateGradualSolution (W.unsatCandidates w) sol
 
 --------------------------------------------------------------------------------
-updateGradualSolution :: [F.SimpC a] -> Sol.GSolution -> SolveM (Sol.GSolution)
+updateGradualSolution :: [F.SimpC s a] -> Sol.GSolution s -> SolveM (Sol.GSolution s)
 --------------------------------------------------------------------------------
 updateGradualSolution cs sol = foldM f (Sol.emptyGMap sol) cs
   where
@@ -307,7 +307,7 @@ updateGradualSolution cs sol = foldM f (Sol.emptyGMap sol) cs
     return $ Sol.updateGMapWithKey gbs s
 
 
-firstValid :: Monoid a =>  F.Expr -> [(a, F.Expr)] -> SolveM a
+firstValid :: Monoid a =>  F.Expr s -> [(a, F.Expr s)] -> SolveM a
 firstValid _   [] = return mempty
 firstValid rhs ((y,lhs):xs) = do
   v <- isValid lhs rhs
@@ -315,7 +315,7 @@ firstValid rhs ((y,lhs):xs) = do
 
 
 --------------------------------------------------------------------------------
-isUnsat :: Fixpoint a => Sol.GSolution -> F.SimpC a -> SolveM Bool
+isUnsat :: Fixpoint a => Sol.GSolution s -> F.SimpC s a -> SolveM Bool
 --------------------------------------------------------------------------------
 isUnsat s c = do
   -- lift   $ printf "isUnsat %s" (show (F.subcId c))

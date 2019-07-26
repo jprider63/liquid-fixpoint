@@ -15,17 +15,18 @@ import           Language.Fixpoint.Types.PrettyPrint
 import           Language.Fixpoint.Graph (partition')
 import qualified Language.Fixpoint.Types        as F
 import qualified Data.HashMap.Strict            as M
+import           Data.Hashable
 import           Data.List (sort,group)
 import           Text.PrettyPrint.HughesPJ
 
-statistics :: Config -> F.FInfo a -> IO (F.Result (Integer, a))
+statistics :: (Show s, Hashable s, Ord s, Fixpoint s) => Config -> F.FInfo s a -> IO (F.Result s (Integer, a))
 statistics _ fi = do
   let fis = partition' Nothing fi
   putStrLn $ render $ pprint $ partitionStats fis
   donePhase Loud "Statistics"
   return mempty
 
-partitionStats :: [F.FInfo a] -> Maybe Stats
+partitionStats :: [F.FInfo s a] -> Maybe Stats
 partitionStats fis = info
   where
     css            = [M.keys $ F.cm fi | fi <- fis]

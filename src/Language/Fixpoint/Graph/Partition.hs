@@ -52,16 +52,16 @@ import           Data.List (sortBy)
 -- | Constraint Partition Container --------------------------------------------
 --------------------------------------------------------------------------------
 
-data CPart c a = CPart { pws :: !(M.HashMap F.KVar (F.WfC a))
+data CPart s c a = CPart { pws :: !(M.HashMap (F.KVar s) (F.WfC s a))
                        , pcm :: !(M.HashMap Integer (c a))
                        }
   
-instance Semigroup (CPart c a) where
+instance (Hashable s, Eq s) => Semigroup (CPart s c a) where
   l <> r = CPart { pws = pws l <> pws r
                  , pcm = pcm l <> pcm r
                  }
 
-instance Monoid (CPart c a) where
+instance (Hashable s, Eq s) => Monoid (CPart s c a) where
    mempty      = CPart mempty mempty
    mappend     = (<>)
    
@@ -83,7 +83,7 @@ mcInfo c = do
                  , mcMaxPartSize = maxPartSize c
                  }
 
-partition :: (F.Fixpoint a, F.Fixpoint (c a), F.TaggedC c a) => Config -> F.GInfo c a -> IO (F.Result (Integer, a))
+partition :: (F.PPrint s, Show s, Hashable s, Ord s, F.Fixpoint s, F.Fixpoint a, F.Fixpoint (c a), F.TaggedC s c a) => Config -> F.GInfo s c a -> IO (F.Result s (Integer, a))
 partition cfg fi
   = do dumpPartitions cfg fis
        -- writeGraph      f   g
@@ -97,8 +97,8 @@ partition cfg fi
 --   produce the maximum possible number of partitions. Or a MultiCore Info
 --   to control the partitioning
 ------------------------------------------------------------------------------
-partition' :: (F.TaggedC c a) 
-           => Maybe MCInfo -> F.GInfo c a -> [F.GInfo c a]
+partition' :: (F.Fixpoint s, Ord s, Eq s, Hashable s, Show s, F.TaggedC s c a) 
+           => Maybe MCInfo -> F.GInfo s c a -> [F.GInfo s c a]
 ------------------------------------------------------------------------------
 partition' mn fi  = case mn of
    Nothing -> fis mkPartition id
@@ -110,10 +110,10 @@ partition' mn fi  = case mn of
 
 -- | Partition an FInfo into a specific number of partitions of roughly equal
 -- amounts of work
-partitionN :: MCInfo        -- ^ describes thresholds and partiton amounts
-           -> F.GInfo c a   -- ^ The originial FInfo
-           -> [CPart c a]   -- ^ A list of the smallest possible CParts
-           -> [F.GInfo c a] -- ^ At most N partitions of at least thresh work
+partitionN :: (Eq s, Hashable s) => MCInfo        -- ^ describes thresholds and partiton amounts
+           -> F.GInfo s c a   -- ^ The originial FInfo
+           -> [CPart s c a]   -- ^ A list of the smallest possible CParts
+           -> [F.GInfo s c a] -- ^ At most N partitions of at least thresh work
 partitionN mi fi cp
    | cpartSize (finfoToCpart fi) <= minThresh = [fi]
    | otherwise = map (cpartToFinfo fi) $ toNParts sortedParts
@@ -145,21 +145,21 @@ partitionN mi fi cp
 
 -- | Return the "size" of a CPart. Used to determine if it's
 -- substantial enough to be worth parallelizing.
-cpartSize :: CPart c a -> Int
+cpartSize :: CPart s c a -> Int
 cpartSize c = (M.size . pcm) c + (length . pws) c
 
 -- | Convert a CPart to an FInfo
-cpartToFinfo :: F.GInfo c a -> CPart c a -> F.GInfo c a
+cpartToFinfo :: F.GInfo s c a -> CPart s c a -> F.GInfo s c a
 cpartToFinfo fi p = fi {F.ws = pws p, F.cm = pcm p} 
 
 -- | Convert an FInfo to a CPart
-finfoToCpart :: F.GInfo c a -> CPart c a
+finfoToCpart :: F.GInfo s c a -> CPart s c a
 finfoToCpart fi = CPart { pcm = F.cm fi
                         , pws = F.ws fi
                         }
 
 -------------------------------------------------------------------------------------
-dumpPartitions :: (F.Fixpoint (c a), F.Fixpoint a) => Config -> [F.GInfo c a] -> IO ()
+dumpPartitions :: (Show s, Hashable s, F.Fixpoint s, Ord s, F.PPrint s, F.Fixpoint (c a), F.Fixpoint a) => Config -> [F.GInfo s c a] -> IO ()
 -------------------------------------------------------------------------------------
 dumpPartitions cfg fis =
   forM_ (zip [0..] fis) $ \(i, fi) ->
@@ -168,16 +168,16 @@ dumpPartitions cfg fis =
 
 -- | Type alias for a function to construct a partition. mkPartition and
 --   mkPartition' are the two primary functions that conform to this interface
-type PartitionCtor c a b = F.GInfo c a
+type PartitionCtor s c a b = F.GInfo s c a
                        -> M.HashMap Int [(Integer, c a)]
-                       -> M.HashMap Int [(F.KVar, F.WfC a)]
+                       -> M.HashMap Int [(F.KVar s, F.WfC s a)]
                        -> Int
-                       -> b -- ^ typically a F.FInfo a or F.CPart a
+                       -> b -- ^ typically a F.FInfo s a or F.CPart a
 
-partitionByConstraints :: PartitionCtor c a b -- ^ mkPartition or mkPartition'
-                       -> F.GInfo c a
-                       -> KVComps
-                       -> ListNE b          -- ^ [F.FInfo a] or [F.CPart a]
+partitionByConstraints :: (Show s, Hashable s, Eq s) => PartitionCtor s c a b -- ^ mkPartition or mkPartition'
+                       -> F.GInfo s c a
+                       -> KVComps s
+                       -> ListNE b          -- ^ [F.FInfo s a] or [F.CPart a]
 partitionByConstraints f fi kvss = f fi icM iwM <$> js
   where
     js   = fst <$> jkvs                                -- groups
@@ -192,21 +192,21 @@ partitionByConstraints f fi kvss = f fi icM iwM <$> js
     kM   = M.fromList [ (k, i) | (KVar k, i) <- kvI ]
     cM   = M.fromList [ (c, i) | (Cstr c, i) <- kvI ]
 
-mkPartition :: F.GInfo c a
+mkPartition :: (Hashable s, Eq s) => F.GInfo s c a
             -> M.HashMap Int [(Integer, c a)]
-            -> M.HashMap Int [(F.KVar, F.WfC a)]
+            -> M.HashMap Int [(F.KVar s, F.WfC s a)]
             -> Int
-            -> F.GInfo c a
+            -> F.GInfo s c a
 mkPartition fi icM iwM j
   = fi{ F.cm       = M.fromList $ M.lookupDefault [] j icM
       , F.ws       = M.fromList $ M.lookupDefault [] j iwM
       }
 
-mkPartition' :: F.GInfo c a
+mkPartition' :: (Hashable s, Eq s) => F.GInfo s c a
              -> M.HashMap Int [(Integer, c a)]
-             -> M.HashMap Int [(F.KVar, F.WfC a)]
+             -> M.HashMap Int [(F.KVar s, F.WfC s a)]
              -> Int
-             -> CPart c a
+             -> CPart s c a
 mkPartition' _ icM iwM j
   = CPart { pcm       = M.fromList $ M.lookupDefault [] j icM
           , pws       = M.fromList $ M.lookupDefault [] j iwM

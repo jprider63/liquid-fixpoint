@@ -36,10 +36,10 @@ import           Text.PrettyPrint.HughesPJ (text)
 
 -- | Worklist ------------------------------------------------------------------
 
-data Worklist a = WL { wCs     :: !WorkSet
+data Worklist s a = WL { wCs     :: !WorkSet
                      , wPend   :: !(CMap ())
                      , wDeps   :: !(CMap [F.SubcId])
-                     , wCm     :: !(CMap (F.SimpC a))
+                     , wCm     :: !(CMap (F.SimpC s a))
                      , wRankm  :: !(CMap Rank)
                      , wLast   :: !(Maybe F.SubcId)
                      , wRanks  :: !Int
@@ -52,7 +52,7 @@ data Stats = Stats { numKvarCs  :: !Int
                    , _numSccs   :: !Int
                    } deriving (Eq, Show)
 
-instance PPrint (Worklist a) where
+instance PPrint (Worklist s a) where
   pprintTidy k = pprintTidy k . S.toList . wCs
 
 instance PTable Stats where
@@ -60,7 +60,7 @@ instance PTable Stats where
                       , (text "# Target Constraints", pprint (numConcCs s))
                       ]
 
-instance PTable (Worklist a) where
+instance PTable (Worklist s a) where
   ptable = ptable . stats
 
 
@@ -88,7 +88,7 @@ instance Ord WorkItem where
 --------------------------------------------------------------------------------
 -- | Initialize worklist and slice out irrelevant constraints ------------------
 --------------------------------------------------------------------------------
-init :: SolverInfo a b -> Worklist a
+init :: (Eq s) => SolverInfo s a b -> Worklist s a
 --------------------------------------------------------------------------------
 init sI    = WL { wCs     = items
                 , wPend   = addPends M.empty kvarCs
@@ -112,13 +112,13 @@ init sI    = WL { wCs     = items
 ---------------------------------------------------------------------------
 -- | Candidate Constraints to be checked AFTER computing Fixpoint ---------
 ---------------------------------------------------------------------------
-unsatCandidates   :: Worklist a -> [F.SimpC a]
+unsatCandidates   :: Worklist s a -> [F.SimpC s a]
 ---------------------------------------------------------------------------
 unsatCandidates w = [ lookupCMap (wCm w) i | i <- wConcCs w ]
 
 
 ---------------------------------------------------------------------------
-pop  :: Worklist a -> Maybe (F.SimpC a, Worklist a, Bool, Int)
+pop  :: Worklist s a -> Maybe (F.SimpC s a, Worklist s a, Bool, Int)
 ---------------------------------------------------------------------------
 pop w = do
   (i, is) <- sPop $ wCs w
@@ -128,24 +128,24 @@ pop w = do
        , rank w i
        )
 
-popW :: Worklist a -> F.SubcId -> WorkSet -> Worklist a
+popW :: Worklist s a -> F.SubcId -> WorkSet -> Worklist s a
 popW w i is = w { wCs   = is
                 , wLast = Just i
                 , wPend = remPend (wPend w) i }
 
 
-newSCC :: Worklist a -> F.SubcId -> Bool
+newSCC :: Worklist s a -> F.SubcId -> Bool
 newSCC oldW i = (rScc <$> oldRank) /= (rScc <$> newRank)
   where
     oldRank   = lookupCMap rankm <$> wLast oldW
     newRank   = Just              $  lookupCMap rankm i
     rankm     = wRankm oldW
 
-rank :: Worklist a -> F.SubcId -> Int
+rank :: Worklist s a -> F.SubcId -> Int
 rank w i = rScc $ lookupCMap (wRankm w) i
 
 ---------------------------------------------------------------------------
-push :: F.SimpC a -> Worklist a -> Worklist a
+push :: F.SimpC s a -> Worklist s a -> Worklist s a
 ---------------------------------------------------------------------------
 push c w = w { wCs   = sAdds (wCs w) wis'
              , wTime = 1 + t
@@ -166,7 +166,7 @@ workItemsAt !r !t !i = WorkItem { wiCId  = i
 
 
 ---------------------------------------------------------------------------
-stats :: Worklist a -> Stats
+stats :: Worklist s a -> Stats
 ---------------------------------------------------------------------------
 stats w = Stats (kn w) (cn w) (wRanks w)
   where

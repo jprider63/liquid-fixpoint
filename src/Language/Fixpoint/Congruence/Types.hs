@@ -39,28 +39,28 @@ data Disequality = Diseq Term Term
 --------------------------------------------------------------------------------
 -- | Exported Constructors
 --------------------------------------------------------------------------------
-app :: F.Symbol -> [Term] -> Term
+app :: F.Symbol s -> [Term] -> Term
 app f as = intern (BApp f as)
 
-var :: F.Symbol -> Term
+var :: F.Symbol s -> Term
 var x = intern (BVar x)
 
 --------------------------------------------------------------------------------
 -- | Hash-consed Term DataType
 --------------------------------------------------------------------------------
 data Term 
-  = Var   {-# UNPACK #-} !Id !F.Symbol 
-  | App   {-# UNPACK #-} !Id !F.Symbol [Term]
+  = Var   {-# UNPACK #-} !Id !(F.Symbol s) 
+  | App   {-# UNPACK #-} !Id !(F.Symbol s) [Term]
 --------------------------------------------------------------------------------
 
 data UninternedTerm
-  = BVar !F.Symbol 
-  | BApp !F.Symbol [Term] 
+  = BVar !(F.Symbol s) 
+  | BApp !(F.Symbol s) [Term] 
 
 instance Interned Term where
   type Uninterned Term  = UninternedTerm
-  data Description Term = DVar F.Symbol
-                        | DApp F.Symbol [Id]
+  data Description Term = DVar (F.Symbol s)
+                        | DApp (F.Symbol s) [Id]
                           deriving Show
   describe (BApp f as)  = DApp f (identity <$> as) 
   describe (BVar x)     = DVar x

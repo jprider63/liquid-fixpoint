@@ -1,3 +1,4 @@
+{-# LANGUAGE TypeApplications #-}
 -- | This module implements the top-level API for interfacing with Fixpoint
 --   In particular it exports the functions that solve constraints supplied
 --   either as .fq files or as FInfo.
@@ -24,6 +25,8 @@ module Language.Fixpoint.Solver (
 
 import           Control.Concurrent
 import           Data.Binary
+import           Data.Void
+import           Data.Hashable
 import           System.Exit                        (ExitCode (..))
 import           System.Console.CmdArgs.Verbosity   (whenNormal, whenLoud)
 import           Text.PrettyPrint.HughesPJ          (render)
@@ -36,6 +39,7 @@ import           Language.Fixpoint.Defunctionalize (defunctionalize)
 import           Language.Fixpoint.SortCheck            (Elaborate (..))
 import           Language.Fixpoint.Solver.UniqifyKVars (wfcUniqify)
 import qualified Language.Fixpoint.Solver.Solve     as Sol
+import           Language.Fixpoint.Smt.Types        (SMTLIB2)
 import           Language.Fixpoint.Types.Config
 import           Language.Fixpoint.Types.Errors
 import           Language.Fixpoint.Utils.Files            hiding (Result)
@@ -51,9 +55,10 @@ import           Control.DeepSeq
 ---------------------------------------------------------------------------
 -- | Solve an .fq file ----------------------------------------------------
 ---------------------------------------------------------------------------
+
 solveFQ :: Config -> IO ExitCode
 solveFQ cfg = do
-    (fi, opts) <- readFInfo file
+    (fi, opts) <- readFInfo @Void file
     cfg'       <- withPragmas cfg opts
     let fi'     = ignoreQualifiers cfg' fi
     r          <- solve cfg' fi'
@@ -62,7 +67,7 @@ solveFQ cfg = do
     file    = srcFile      cfg
 
 ---------------------------------------------------------------------------
-resultExitCode :: Result SubcId -> IO ExitCode 
+resultExitCode :: (NFData s) => Result s SubcId -> IO ExitCode 
 ---------------------------------------------------------------------------
 resultExitCode r = do 
   -- let str  = render $ resultDoc $!! (const () <$> stat)
@@ -74,7 +79,7 @@ resultExitCode r = do
     eCode   = resultExit . resStatus
     statStr = render . resultDoc 
 
-ignoreQualifiers :: Config -> FInfo a -> FInfo a
+ignoreQualifiers :: Config -> FInfo s a -> FInfo s a
 ignoreQualifiers cfg fi
   | eliminate cfg == All = fi { quals = [] }
   | otherwise            = fi
@@ -83,7 +88,7 @@ ignoreQualifiers cfg fi
 --------------------------------------------------------------------------------
 -- | Solve FInfo system of horn-clause constraints -----------------------------
 --------------------------------------------------------------------------------
-solve :: (NFData a, Fixpoint a, Show a, Loc a) => Solver a
+solve :: (NFData s, Fixpoint s, Ord s, Hashable s, Show s, PPrint s, Binary s, SMTLIB2 s s, NFData a, Fixpoint a, Show a, Loc a) => Solver s a
 --------------------------------------------------------------------------------
 solve cfg q
   | parts cfg      = partition  cfg        $!! q
@@ -93,36 +98,36 @@ solve cfg q
   | minimizeKs cfg = minKvars cfg solve'   $!! q
   | otherwise      = solve'     cfg        $!! q
 
-solve' :: (NFData a, Fixpoint a, Show a, Loc a) => Solver a
+solve' :: (Binary s, Hashable s, Show s, Ord s, Fixpoint s, PPrint s, SMTLIB2 s s, NFData s, NFData a, Fixpoint a, Show a, Loc a) => Solver s a
 solve' cfg q = do
   when (save cfg) $ saveQuery   cfg q
   configSW  cfg     solveNative cfg q
 
-configSW :: (NFData a, Fixpoint a, Show a, Loc a) => Config -> Solver a -> Solver a
+configSW :: (Hashable s, Fixpoint s, Ord s, Show s, NFData a, Fixpoint a, Show a, Loc a) => Config -> Solver s a -> Solver s a
 configSW cfg
   | multicore cfg = solveParWith
   | otherwise     = solveSeqWith
 
 --------------------------------------------------------------------------------
-readFInfo :: FilePath -> IO (FInfo (), [String])
+readFInfo :: (Binary s, Hashable s, Show s, Fixpoint s, Ord s) => FilePath -> IO (FInfo s (), [String])
 --------------------------------------------------------------------------------
 readFInfo f
   | isBinary f = (,) <$> readBinFq f <*> return []
   | otherwise  = readFq f
 
-readFq :: FilePath -> IO (FInfo (), [String])
+readFq :: forall s. (Ord s, Fixpoint s, Hashable s, Show s) => FilePath -> IO (FInfo s (), [String])
 readFq file = do
   str   <- readFile file
-  let q  = {-# SCC "parsefq" #-} rr' file str :: FInfoWithOpts ()
+  let q  = {-# SCC "parsefq" #-} rr' file str :: FInfoWithOpts s ()
   return (fioFI q, fioOpts q)
 
-readBinFq :: FilePath -> IO (FInfo ())
+readBinFq :: (Hashable s, Eq s, Binary s) => FilePath -> IO (FInfo s ())
 readBinFq file = {-# SCC "parseBFq" #-} decodeFile file
 
 --------------------------------------------------------------------------------
 -- | Solve in parallel after partitioning an FInfo to indepdendant parts
 --------------------------------------------------------------------------------
-solveSeqWith :: (Fixpoint a) => Solver a -> Solver a
+solveSeqWith :: (Hashable s, Eq s, Fixpoint a) => Solver s a -> Solver s a
 solveSeqWith s c fi0 = {- withProgressFI fi $ -} s c fi
   where
     fi               = slice c fi0
@@ -130,7 +135,7 @@ solveSeqWith s c fi0 = {- withProgressFI fi $ -} s c fi
 --------------------------------------------------------------------------------
 -- | Solve in parallel after partitioning an FInfo to indepdendant parts
 --------------------------------------------------------------------------------
-solveParWith :: (Fixpoint a) => Solver a -> Solver a
+solveParWith :: (Show s, Ord s, Fixpoint s, Eq s, Hashable s, Fixpoint a) => Solver s a -> Solver s a
 --------------------------------------------------------------------------------
 solveParWith s c fi0 = do
   -- putStrLn "Using Parallel Solver \n"
@@ -151,7 +156,7 @@ solveParWith s c fi0 = do
 --------------------------------------------------------------------------------
 -- | Solve a list of FInfos using the provided solver function in parallel
 --------------------------------------------------------------------------------
-inParallelUsing :: (a -> IO (Result b)) -> [a] -> IO (Result b)
+inParallelUsing :: (Eq s, Hashable s) => (a -> IO (Result s b)) -> [a] -> IO (Result s b)
 --------------------------------------------------------------------------------
 inParallelUsing f xs = do
    setNumCapabilities (length xs)
@@ -161,24 +166,36 @@ inParallelUsing f xs = do
 --------------------------------------------------------------------------------
 -- | Native Haskell Solver -----------------------------------------------------
 --------------------------------------------------------------------------------
-solveNative, solveNative' :: (NFData a, Fixpoint a, Show a, Loc a) => Solver a
+solveNative, solveNative' :: (NFData s, PPrint s, Hashable s, SMTLIB2 s s, Ord s, Fixpoint s, Show s, NFData a, Fixpoint a, Show a, Loc a) => Solver s a
 --------------------------------------------------------------------------------
 solveNative !cfg !fi0 = (solveNative' cfg fi0)
                           `catch`
                              (return . result)
 
-result :: Error -> Result a
+solveNative' !cfg !fi0 = do
+  si6 <- simplifyFInfo cfg fi0
+  res <- {-# SCC "Sol.solve" #-} Sol.solve cfg $!! si6
+  -- rnf soln `seq` donePhase Loud "Solve2"
+  --let stat = resStatus res
+  saveSolution cfg res
+  -- when (save cfg) $ saveSolution cfg
+  -- writeLoud $ "\nSolution:\n"  ++ showpp (resSolution res)
+  -- colorStrLn (colorResult stat) (show stat)
+  return res
+
+
+result :: (Hashable s, Eq s) => Error -> Result s a
 result e = Result (Crash [] msg) mempty mempty
   where
     msg  = showpp e
 
-loudDump :: (Fixpoint a) => Int -> Config -> SInfo a -> IO ()
+loudDump :: (Show s, Hashable s, Fixpoint s, Ord s, PPrint s, Fixpoint a) => Int -> Config -> SInfo s a -> IO ()
 loudDump i cfg si = when False (writeLoud $ msg ++ render (toFixpoint cfg si))
   where
     msg           = "fq file after Uniqify & Rename " ++ show i ++ "\n"
 
-simplifyFInfo :: (NFData a, Fixpoint a, Show a, Loc a)
-               => Config -> FInfo a -> IO (SInfo a)
+simplifyFInfo :: (SMTLIB2 s s, NFData s, PPrint s, Show s, Fixpoint s, Hashable s, Ord s, NFData a, Fixpoint a, Show a, Loc a)
+               => Config -> FInfo s a -> IO (SInfo s a)
 simplifyFInfo !cfg !fi0 = do
   -- writeLoud $ "fq file in: \n" ++ render (toFixpoint cfg fi)
   -- rnf fi0 `seq` donePhase Loud "Read Constraints"
@@ -205,33 +222,24 @@ simplifyFInfo !cfg !fi0 = do
   instantiate cfg $!! si5
 
 
-solveNative' !cfg !fi0 = do
-  si6 <- simplifyFInfo cfg fi0
-  res <- {-# SCC "Sol.solve" #-} Sol.solve cfg $!! si6
-  -- rnf soln `seq` donePhase Loud "Solve2"
-  --let stat = resStatus res
-  saveSolution cfg res
-  -- when (save cfg) $ saveSolution cfg
-  -- writeLoud $ "\nSolution:\n"  ++ showpp (resSolution res)
-  -- colorStrLn (colorResult stat) (show stat)
-  return res
+
 
 --------------------------------------------------------------------------------
 -- | Parse External Qualifiers -------------------------------------------------
 --------------------------------------------------------------------------------
-parseFInfo :: [FilePath] -> IO (FInfo a)
+parseFInfo :: (Hashable s, Show s, Fixpoint s, Ord s) => [FilePath] -> IO (FInfo s a)
 --------------------------------------------------------------------------------
 parseFInfo fs = mconcat <$> mapM parseFI fs
 
-parseFI :: FilePath -> IO (FInfo a)
+parseFI :: forall a s. (Hashable s, Ord s, Fixpoint s, Show s, Eq s) => FilePath -> IO (FInfo s a)
 parseFI f = do
   str   <- readFile f
-  let fi = rr' f str :: FInfo ()
+  let fi = rr' f str :: FInfo s ()
   return $ mempty { quals = quals  fi
                   , gLits = gLits  fi
                   , dLits = dLits  fi }
 
-saveSolution :: Config -> Result a -> IO ()
+saveSolution :: (Ord s, Fixpoint s, PPrint s) => Config -> Result s a -> IO ()
 saveSolution cfg res = when (save cfg) $ do
   let f = queryFile Out cfg
   putStrLn $ "Saving Solution: " ++ f ++ "\n"

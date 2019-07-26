@@ -1,3 +1,7 @@
+{-# LANGUAGE ScopedTypeVariables  #-}
+{-# LANGUAGE TypeApplications     #-}
+
+
 {- | This module creates new bindings for each argument of each kvar.
      It also makes sure that all arguments to each kvar are explicit.
 
@@ -31,46 +35,51 @@ wf:
 
 -}
 
+
+
 module Language.Fixpoint.Solver.UniqifyKVars (wfcUniqify) where
 
 import           Language.Fixpoint.Types
 import           Language.Fixpoint.Types.Visitor (mapKVarSubsts)
 import qualified Data.HashMap.Strict as M
+import           Data.Hashable
 import           Data.Foldable       (foldl')
 
 --------------------------------------------------------------------------------
-wfcUniqify    :: SInfo a -> SInfo a
+wfcUniqify    :: (Fixpoint s, Show s, Ord s, Eq s, Hashable s) => SInfo s a -> SInfo s a
 wfcUniqify fi = updateWfcs $ remakeSubsts fi
 
 
 
 -- mapKVarSubsts (\k su -> restrict table k su xs)
 --------------------------------------------------------------------------------
-remakeSubsts :: SInfo a -> SInfo a
+remakeSubsts :: (Eq s, Hashable s) => SInfo s a -> SInfo s a
 --------------------------------------------------------------------------------
 remakeSubsts fi = mapKVarSubsts (remakeSubst fi) fi
 
-remakeSubst :: SInfo a -> KVar -> Subst -> Subst
+remakeSubst :: (Hashable s, Eq s) => SInfo s a -> KVar s -> Subst s -> Subst s
 remakeSubst fi k su = foldl' (updateSubst k) su (kvarDomain fi k)
 
-updateSubst :: KVar -> Subst -> Symbol -> Subst
+updateSubst :: (Eq s, Hashable s) => KVar s -> Subst s -> Symbol s -> Subst s
 updateSubst k (Su su) sym
   = case M.lookup sym su of
       Just z  -> Su $ M.delete sym $ M.insert ksym z          su
       Nothing -> Su $                M.insert ksym (eVar sym) su
     where
       kx      = kv k
-      ksym    = kArgSymbol sym kx
+      ksym    = kArgSymbolF sym kx
+      kArgSymbolF (FS s) (FS k) = FS (kArgSymbol s k)
+      kArgSymbolF _ _     = error "updateSubst: cannot apply kArgSymbol to Symbol s "
 
 -- / | sym `M.member` su = Su $ M.delete sym $ M.insert ksym (su M.! sym) su
 -- /  | otherwise         = Su $                M.insert ksym (eVar sym)   su
 
 --------------------------------------------------------------------------------
-updateWfcs :: SInfo a -> SInfo a
+updateWfcs :: (Show s, Fixpoint s, Hashable s, Eq s, Ord s) => SInfo s a -> SInfo s a
 --------------------------------------------------------------------------------
 updateWfcs fi = M.foldl' updateWfc fi (ws fi)
 
-updateWfc :: SInfo a -> WfC a -> SInfo a
+updateWfc :: forall s a. (Hashable s, Eq s, Ord s, Fixpoint s, Show s) => SInfo s a -> WfC s a -> SInfo s a
 updateWfc fi w    = fi'' { ws = M.insert k w' (ws fi) }
   where
     w'            = updateWfCExpr (subst su) w''
@@ -78,32 +87,37 @@ updateWfc fi w    = fi'' { ws = M.insert k w' (ws fi) }
     (_, fi'')     = newTopBind v' (trueSortedReft t) fi'
     (fi', newIds) = foldl' (accumBindsIfValid k) (fi, []) (elemsIBindEnv $ wenv w)
     (v, t, k)     = wrft w
-    v'            = kArgSymbol v (kv k)
-    su            = mkSubst ((v, EVar v'):[(x, eVar $ kArgSymbol x (kv k)) | x <- kvarDomain fi k])
+    v'            = kArgSymbolF v (kv k)
+    su            = mkSubst ((v, EVar v'):[(x, eVar @s @(Symbol s) $ kArgSymbolF x (kv k)) | x <- kvarDomain fi k])
+    kArgSymbolF (FS s) (FS k) = FS (kArgSymbol s k)
+    kArgSymbolF _ _     = error "updateWfc: cannot apply kArgSymbol to Symbol s "
+    
 
-accumBindsIfValid :: KVar -> (SInfo a, [BindId]) -> BindId -> (SInfo a, [BindId])
+accumBindsIfValid :: (Hashable s, Show s, Fixpoint s, Ord s) => KVar s -> (SInfo s a, [BindId]) -> BindId -> (SInfo s a, [BindId])
 accumBindsIfValid k (fi, ids) i = if renamable then accumBinds k (fi, ids) i else (fi, i : ids)
   where
     (_, sr)                     = lookupBindEnv i      (bs fi)
     renamable                   = isValidInRefinements (sr_sort sr)
 
-accumBinds :: KVar -> (SInfo a, [BindId]) -> BindId -> (SInfo a, [BindId])
+accumBinds :: (Show s, Fixpoint s, Ord s, Hashable s) => KVar s -> (SInfo s a, [BindId]) -> BindId -> (SInfo s a, [BindId])
 accumBinds k (fi, ids) i = (fi', i' : ids)
   where
     (oldSym, sr) = lookupBindEnv i (bs fi)
-    newSym       = {- tracepp "kArgSymbol" $ -}  kArgSymbol oldSym (kv k)
+    newSym       = {- tracepp "kArgSymbol" $ -}  kArgSymbolF oldSym (kv k)
     (i', fi')    = newTopBind newSym sr fi
+    kArgSymbolF (FS s) (FS k) = FS (kArgSymbol s k)
+    kArgSymbolF _ _     = error "updateWfc: cannot apply kArgSymbol to Symbol s "
 
 -- | `newTopBind` ignores the actual refinements as they are not relevant
 --   in the kvar parameters (as suggested by BLC.)
-newTopBind :: Symbol -> SortedReft -> SInfo a -> (BindId, SInfo a)
+newTopBind :: forall s a. (Hashable s, Ord s, Fixpoint s, Show s) => Symbol s -> SortedReft s -> SInfo s a -> (BindId, SInfo s a)
 newTopBind x sr fi = (i', fi {bs = be'})
   where
-    (i', be')   = insertBindEnv x (top sr) (bs fi)
+    (i', be')   = insertBindEnv x (top @s @_ sr) (bs fi)
 
 --------------------------------------------------------------
 
-isValidInRefinements :: Sort -> Bool
+isValidInRefinements :: Sort s -> Bool
 isValidInRefinements FInt        = True
 isValidInRefinements FReal       = True
 isValidInRefinements FNum        = False

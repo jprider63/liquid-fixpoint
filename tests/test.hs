@@ -167,10 +167,10 @@ quickCheckTests
 prop_pprint_parse_inv_pred :: Pred -> Bool
 prop_pprint_parse_inv_pred p = p == rr (showpp p)
 
-prop_pprint_parse_inv_expr :: Expr -> Bool
+prop_pprint_parse_inv_expr :: Expr s -> Bool
 prop_pprint_parse_inv_expr p = simplify p == rr (showpp $ simplify p)
 
-instance Arbitrary Sort where
+instance Arbitrary (Sort s) where
   arbitrary = sized arbSort
 
 arbSort 0 = oneof [return FInt, return FReal, return FNum]
@@ -214,7 +214,7 @@ arbPred n = frequency
       y <- arbPred (n `div` 2)
       return [x,y]
 
-instance Arbitrary Expr where
+instance Arbitrary (Expr s) where
   arbitrary = sized arbExpr
   shrink = filter valid . genericShrink
     where valid (EApp _ []) = False
@@ -257,13 +257,13 @@ instance Arbitrary Text where
       char = elements ['a'..'z']
       valid x = x `notElem` fixpointNames && not (isFixKey x)
 
-instance Arbitrary FTycon where
+instance Arbitrary (FTycon s) where
   arbitrary = do
     c <- elements ['A'..'Z']
     t <- arbitrary
     return $ symbolFTycon $ dummyLoc $ symbol $ cons c t
 
-instance Arbitrary Constant where
+instance Arbitrary (Constant s) where
   arbitrary = oneof [fmap I (arbitrary `suchThat` (>=0))
                     -- ,fmap R arbitrary
                     ]

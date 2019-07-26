@@ -8,6 +8,7 @@ module Language.Fixpoint.Graph.Reducible ( isReducible ) where
 
 import qualified Data.Tree                            as T
 import qualified Data.HashMap.Strict                  as M
+import           Data.Hashable
 import           Data.Graph.Inductive
 
 import           Language.Fixpoint.Misc         -- hiding (group)
@@ -16,7 +17,7 @@ import qualified Language.Fixpoint.Types              as F
 
 
 --------------------------------------------------------------------------------
-isReducible :: (F.TaggedC c a) => F.GInfo c a -> Bool
+isReducible :: (Show s, Eq s, Hashable s, F.TaggedC s c a) => F.GInfo s c a -> Bool
 --------------------------------------------------------------------------------
 isReducible fi = all (isReducibleWithStart g) vs
   where
@@ -32,7 +33,7 @@ isReducibleWithStart g x = all (isBackEdge domList) rEdges
 
 
 
-convertToGraph :: (F.TaggedC c a) => F.GInfo c a -> Gr Int ()
+convertToGraph :: (Hashable s, Eq s, Show s, F.TaggedC s c a) => F.GInfo s c a -> Gr Int ()
 convertToGraph fi = mkGraph vs es
   where
     subCs        = M.elems (F.cm fi)
@@ -57,6 +58,6 @@ isBackEdge t (u,v) = v `elem` xs
   where
     (Just xs) = lookup u t
 
-subcEdges' :: (F.TaggedC c a) => (F.KVar -> Node) -> F.BindEnv -> c a -> [(Node, Node)]
+subcEdges' :: (Hashable s, Eq s, F.TaggedC s c a) => (F.KVar s -> Node) -> F.BindEnv s -> c a -> [(Node, Node)]
 subcEdges' kvI be c = [(kvI k1, kvI k2) | k1 <- V.envKVars be c
                                         , k2 <- V.kvars $ F.crhs c]

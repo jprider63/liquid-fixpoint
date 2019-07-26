@@ -15,6 +15,7 @@ import           Language.Fixpoint.Misc
 import           Data.Hashable
 import           Data.Semigroup (Semigroup (..))
 import qualified Data.Text as T
+import           Data.Void
 
 traceFix     ::  (Fixpoint a) => String -> a -> a
 traceFix s x = trace ("\nTrace: [" ++ s ++ "] : " ++ showFix x) x
@@ -31,6 +32,11 @@ showFix =  render . toFix
 instance (Ord a, Hashable a, Fixpoint a) => Fixpoint (S.HashSet a) where
   toFix xs = brackets $ sep $ punctuate ";" (toFix <$> L.sort (S.toList xs))
   simplify = S.fromList . map simplify . S.toList
+
+
+instance Fixpoint Void where
+  toFix = absurd
+
 
 instance Fixpoint () where
   toFix _ = "()"
@@ -93,6 +99,9 @@ tracepp s x = trace ("\nTrace: [" ++ s ++ "] : " ++ showpp x) x
 
 notracepp :: (PPrint a) => String -> a -> a
 notracepp _ x = x
+
+instance PPrint Void where
+  pprintTidy _ = absurd
 
 instance PPrint Doc where
   pprintTidy _ = id

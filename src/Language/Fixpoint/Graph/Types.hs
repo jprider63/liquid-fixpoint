@@ -64,56 +64,56 @@ import qualified Data.HashSet              as S
 import GHC.Stack
 --------------------------------------------------------------------------------
 
-data CVertex = KVar  !KVar    -- ^ real kvar vertex
-             | DKVar !KVar    -- ^ dummy to ensure each kvar has a successor
-             | EBind !F.Symbol  -- ^ existentially bound "ghost paramter" to solve for
-             | Cstr  !Integer -- ^ constraint-id which creates a dependency
-               deriving (Eq, Ord, Show, Generic)
+data CVertex s = KVar  !(KVar s)    -- ^ real kvar vertex
+               | DKVar !(KVar s)    -- ^ dummy to ensure each kvar has a successor
+               | EBind !(F.Symbol s)  -- ^ existentially bound "ghost paramter" to solve for
+               | Cstr  !Integer -- ^ constraint-id which creates a dependency
+                deriving (Eq, Ord, Show, Generic)
 
-instance PPrint CVertex where
+instance (PPrint s) => PPrint (CVertex s) where
   pprintTidy _ (KVar k)  = doubleQuotes $ pprint $ kv k
   pprintTidy _ (EBind s)  = doubleQuotes $ pprint $ s
   pprintTidy _ (Cstr i)  = text "id_" <-> pprint i
   pprintTidy _ (DKVar k) = pprint k   <-> text "*"
 
 
-instance Hashable CVertex
+instance (Hashable s) => Hashable (CVertex s)
 
-data KVGraph    = KVGraph { kvgEdges :: [(CVertex, CVertex, [CVertex])] }
-type CEdge      = (CVertex, CVertex)
+data KVGraph s  = KVGraph { kvgEdges :: [(CVertex s, CVertex s, [CVertex s])] }
+type CEdge s      = (CVertex s, CVertex s)
 type Comps a    = [[a]]
-type KVComps    = Comps CVertex
+type KVComps s    = Comps (CVertex s)
 
-instance PPrint KVGraph where
+instance (PPrint s) => PPrint (KVGraph s) where
   pprintTidy _ = pprint . kvgEdges
 
 --------------------------------------------------------------------------------
-writeGraph :: FilePath -> KVGraph -> IO ()
+writeGraph :: (PPrint s) => FilePath -> KVGraph s -> IO ()
 --------------------------------------------------------------------------------
 writeGraph f = writeEdges f . graphEdges
   where
-    graphEdges :: KVGraph -> [CEdge]
+    graphEdges :: KVGraph s -> [CEdge s]
     graphEdges (KVGraph g) = [ (v, v') | (v,_,vs) <- g, v' <- vs]
 
 --------------------------------------------------------------------------------
-writeEdges :: FilePath -> [CEdge] -> IO ()
+writeEdges :: (PPrint s) => FilePath -> [CEdge s] -> IO ()
 --------------------------------------------------------------------------------
 writeEdges f = writeFile f . render . ppEdges
 
-ppEdges :: [CEdge] -> Doc
+ppEdges :: (PPrint s) => [CEdge s] -> Doc
 ppEdges             = vcat . wrap ["digraph Deps {"] ["}"]
                            . map ppE
                            . (if True then filter isRealEdge else txEdges)  -- RJ: use this to collapse "constraint" vertices
   where
     ppE (v, v')     = pprint v <+> "->" <+> pprint v'
 
-isRealEdge :: CEdge -> Bool
+isRealEdge :: CEdge s -> Bool
 isRealEdge (DKVar _, _)     = False
 isRealEdge (_, DKVar _)     = False
 isRealEdge (Cstr _, Cstr _) = False
 isRealEdge _                = True
 
-txEdges    :: [CEdge] -> [CEdge]
+txEdges    :: [CEdge s] -> [CEdge s]
 txEdges es = concatMap iEs is
   where
     is     = [i | (Cstr i, Cstr _) <- es]
@@ -131,7 +131,7 @@ txEdges es = concatMap iEs is
 ---------------------------------------------------------------------------
 -- | Dramatis Personae
 ---------------------------------------------------------------------------
-type KVRead  = M.HashMap F.KVar [F.SubcId]
+type KVRead s  = M.HashMap (F.KVar s) [F.SubcId]
 type DepEdge = (F.SubcId, F.SubcId, [F.SubcId])
 
 data Slice = Slice { slKVarCs :: [F.SubcId]     -- ^ F.SubcIds that transitively "reach" below
@@ -157,8 +157,8 @@ lookupCMap rm i = safeLookup err i rm
 -- | Constraint Dependencies ---------------------------------------------------
 --------------------------------------------------------------------------------
 
-data CDeps = CDs { cSucc   :: !(F.CMap [F.SubcId]) -- ^ Constraints *written by* a SubcId
-                 , cPrev   :: !(F.CMap [F.KVar])   -- ^ (Cut) KVars *read by*    a SubcId
+data CDeps s = CDs { cSucc   :: !(F.CMap [F.SubcId]) -- ^ Constraints *written by* a SubcId
+                 , cPrev   :: !(F.CMap [F.KVar s])   -- ^ (Cut) KVars *read by*    a SubcId
                  , cRank   :: !(F.CMap Rank)       -- ^ SCC rank of a SubcId
                  , cNumScc :: !Int                 -- ^ Total number of Sccs
                  }
@@ -178,9 +178,9 @@ instance PPrint Rank where
 -- | `SolverInfo` contains all the stuff needed to produce a result, and is the
 --   the essential ingredient of the state needed by solve_
 --------------------------------------------------------------------------------
-data SolverInfo a b = SI
-  { siSol     :: !(F.Sol b F.QBind)             -- ^ the initial solution
-  , siQuery   :: !(F.SInfo a)                   -- ^ the whole input query
-  , siDeps    :: !CDeps                         -- ^ dependencies between constraints/ranks etc.
-  , siVars    :: !(S.HashSet F.KVar)            -- ^ set of KVars to actually solve for
+data SolverInfo s a b = SI
+  { siSol     :: !(F.Sol s b (F.QBind s))             -- ^ the initial solution
+  , siQuery   :: !(F.SInfo s a)                   -- ^ the whole input query
+  , siDeps    :: !(CDeps s)                         -- ^ dependencies between constraints/ranks etc.
+  , siVars    :: !(S.HashSet (F.KVar s))            -- ^ set of KVars to actually solve for
   }

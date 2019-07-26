@@ -40,12 +40,12 @@ noTrigger = TR NoTrigger
 defaultTrigger :: e -> Triggered e
 defaultTrigger = TR LeftHandSide
 
-makeTriggers :: Triggered Expr -> [Expr]
+makeTriggers :: Triggered (Expr s) -> [Expr s]
 makeTriggers (TR LeftHandSide e) = [getLeftHandSide e]
 makeTriggers (TR NoTrigger    _) = errorstar "makeTriggers on NoTrigger"
 
 
-getLeftHandSide :: Expr -> Expr
+getLeftHandSide :: Expr s -> Expr s
 getLeftHandSide (ECst e _)
   = getLeftHandSide e
 getLeftHandSide (PAll _ e)
@@ -61,7 +61,7 @@ getLeftHandSide _
  = defaltPatter
 
 -- NV TODO find out a valid, default pattern that does not instantiate the axiom
-defaltPatter :: Expr
+defaltPatter :: Expr s
 defaltPatter = PFalse
 
 instance B.Binary Trigger
